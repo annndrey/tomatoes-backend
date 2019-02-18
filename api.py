@@ -120,8 +120,6 @@ def get_auth_token():
     return jsonify({ 'token': "%s" % token })
 
 
-
-
 # SCHEMAS 
 class UserSchema(ma.ModelSchema):
     class Meta:
@@ -147,7 +145,16 @@ class StatsAPI(Resource):
 
         return jsonify({})
 
-        
+    @token_required
+    @cross_origin()
+    def post(self):
+        print(request.files)
+        f = request.files['file']
+        data = f.read()
+        size = len(data)
+        return jsonify("Server response: Image uploaded, size: {}".format(size))
+
+
 class UserAPI(Resource):
     def __init__(self):
         self.reqparse = reqparse.RequestParser()
@@ -240,6 +247,7 @@ class UserAPI(Resource):
         abort(404, message="Not found")
 
 api.add_resource(UserAPI, '/users', '/users/<int:id>', endpoint = 'users')
+api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
 
 
 @app.cli.command()
