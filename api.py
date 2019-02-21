@@ -148,11 +148,12 @@ class StatsAPI(Resource):
     @token_required
     @cross_origin()
     def post(self):
-        print(request.files)
+        index = request.form['index']
         f = request.files['file']
+        print(f.filename)
         data = f.read()
         size = len(data)
-        return jsonify("Server response: Image uploaded, size: {}".format(size))
+        return jsonify({'response':"Server response: Image uploaded, size: {}".format(size), 'index': index, 'filename': f.filename})
 
 
 class UserAPI(Resource):
