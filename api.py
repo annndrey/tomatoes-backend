@@ -23,6 +23,17 @@ from dateutil.relativedelta import relativedelta
 import jwt
 import json
 
+# AI
+import torch
+import torchvision
+from torchvision import datasets, models, transforms
+
+import io
+import requests
+from PIL import Image
+import glob
+from collections import OrderedDict
+
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}}, support_credentials=True, methods=['GET', 'POST', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
@@ -33,6 +44,84 @@ app.config['PROPAGATE_EXCEPTIONS'] = True
 db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
+
+# _____________________ AI Section _____________________
+
+tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
+plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
+tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
+using_model_name = app.config['USING_MODEL_NAME']
+num_classes_used = app.config['NUM_CLASSES_USED']
+using_data_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+modres = ( { 0 : "Not a Tomat", 1 : "Tomat" },
+           { 0 : "TomatHealthy", 1 : "TomatNonHealthy" },
+           { 0 : "PlantHealthy", 1 : "PlantNonHealthy" }
+)
+
+aimodels = ()
+
+torch.set_grad_enabled(False)
+
+def load_pretrained_weights(model, weight_path):
+    """Load pretrianed weights to model
+    Incompatible layers (unmatched in name or size) will be ignored
+    Args:
+    - model (nn.Module): network model, which must not be nn.DataParallel
+    - weight_path (str): path to pretrained weights
+    """
+#    checkpoint = torch.load(weight_path)
+    checkpoint = torch.load(weight_path, map_location='cpu')
+    if 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    else:
+        state_dict = checkpoint
+    model_dict = model.state_dict()
+    new_state_dict = OrderedDict()
+    matched_layers, discarded_layers = [], []
+    for k, v in state_dict.items():
+        # If the pretrained state_dict was saved as nn.DataParallel,
+        # keys would contain "module.", which should be ignored.
+        if k.startswith('module.'):
+            k = k[7:]
+        if k in model_dict and model_dict[k].size() == v.size():
+            new_state_dict[k] = v
+            matched_layers.append(k)
+        else:
+            discarded_layers.append(k)
+    model_dict.update(new_state_dict)
+    model.load_state_dict(model_dict)
+    if len(matched_layers) == 0:
+        warnings.warn('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
+    else:
+        print('Successfully loaded pretrained weights from "{}"'.format(weight_path))
+        if len(discarded_layers) > 0:
+            print("** The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+
+            
+@app.before_first_request            
+def loadmodels():
+    print("loading models")
+    tomat_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
+    load_pretrained_weights(tomat_or_not_model, tomat_or_not_path)
+    tomat_or_not_model.eval()
+
+    plant_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
+    load_pretrained_weights(plant_health_or_not_model, plant_health_or_not_path)
+    plant_health_or_not_model.eval()
+
+    tomat_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
+    load_pretrained_weights(tomat_health_or_not_model, tomat_health_or_not_path)
+    tomat_health_or_not_model.eval()
+    global aimodels
+    aimodels = (tomat_or_not_model, tomat_health_or_not_model, plant_health_or_not_model)
+
+# _____________________ AI Section _____________________
 
 
 def token_required(f):  
@@ -150,10 +239,26 @@ class StatsAPI(Resource):
     def post(self):
         index = request.form['index']
         f = request.files['file']
-        print(f.filename)
         data = f.read()
-        size = len(data)
-        return jsonify({'response':"Server response: Image uploaded, size: {}".format(size), 'index': index, 'filename': f.filename})
+        img_pil = Image.open(io.BytesIO(data))
+        img_tensor = using_data_transform(img_pil)
+        img_tensor.unsqueeze_(0)
+        img_variable = img_tensor
+        result = {}
+        
+        for model in aimodels:
+            outputs = model(img_variable)
+            _, preds = torch.max(outputs, 1)
+            key = f.filename
+            if key in result:
+                result[key].append( int(preds) )
+            else:
+                result[key]= [int(preds)]
+                
+        for fn, res in result.items():
+            print(fn , modres[0][res[0]], modres[1][res[1]], modres[2][res[2]], )
+        
+        return jsonify({'response':[modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]], 'index': index, 'filename': f.filename})
 
 
 class UserAPI(Resource):
