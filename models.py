@@ -71,9 +71,9 @@ class User(db.Model):
 
 class UserQuery(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    path = db.Column(db.Text(), nullable=True)
+    local_name = db.Column(db.Text(), nullable=True)
     orig_name = db.Column(db.Text(), nullable=True)
-    timestamp = db.Column(db.DateTime, default=False)
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.now())
     user_id = db.Column(db.Integer, ForeignKey('user.id'))
     user = relationship("User", backref=backref("queries"))
     result = db.Column(db.Text(), nullable=True)
