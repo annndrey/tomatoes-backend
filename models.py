@@ -68,3 +68,12 @@ class User(db.Model):
         user = Staff.query.get(data['id'])
         return user
 
+
+class UserQuery(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    path = db.Column(db.Text(), nullable=True)
+    orig_name = db.Column(db.Text(), nullable=True)
+    timestamp = db.Column(db.DateTime, default=False)
+    user_id = db.Column(db.Integer, ForeignKey('user.id'))
+    user = relationship("User", backref=backref("queries"))
+    result = db.Column(db.Text(), nullable=True)

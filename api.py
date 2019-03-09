@@ -15,7 +15,8 @@ from flask_cors import CORS, cross_origin
 from flask_restful.utils import cors
 from marshmallow import fields
 from marshmallow_enum import EnumField
-from models import db, User
+from models import db, User, UserQuery
+
 import click
 import datetime
 import calendar
@@ -237,6 +238,13 @@ class StatsAPI(Resource):
     @token_required
     @cross_origin()
     def post(self):
+        auth_headers = request.headers.get('Authorization', '').split()
+        token = auth_headers[1]
+        data = jwt.decode(token, current_app.config['SECRET_KEY'])
+        user = User.query.filter_by(login=data['sub']).first()
+        if not user:
+            return abort(403)
+        
         index = request.form['index']
         f = request.files['file']
         data = f.read()
@@ -254,11 +262,16 @@ class StatsAPI(Resource):
                 result[key].append( int(preds) )
             else:
                 result[key]= [int(preds)]
-                
-        for fn, res in result.items():
-            print(fn , modres[0][res[0]], modres[1][res[1]], modres[2][res[2]], )
+
+        # create new UserQuery here
+        # >>>>
+        # add user query to the history
+        # save file to the path with uuid and orig fname
+        # save the result
         
-        return jsonify({'response':" or ".join([modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]]).capitalize(), 'index': index, 'filename': f.filename})
+        result  = jsonify({'response':" or ".join([modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]]).capitalize(), 'index': index, 'filename': f.filename})
+        
+        return result
 
 
 class UserAPI(Resource):
