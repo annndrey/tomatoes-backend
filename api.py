@@ -59,9 +59,9 @@ using_data_transform = transforms.Compose([
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-modres = ( { 0 : "Not a Tomat", 1 : "Tomat" },
-           { 0 : "TomatHealthy", 1 : "TomatNonHealthy" },
-           { 0 : "PlantHealthy", 1 : "PlantNonHealthy" }
+modres = ( { 0 : "this is not a tomato", 1 : "looks like a tomato" },
+           { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
+           { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
 )
 
 aimodels = ()
@@ -258,7 +258,7 @@ class StatsAPI(Resource):
         for fn, res in result.items():
             print(fn , modres[0][res[0]], modres[1][res[1]], modres[2][res[2]], )
         
-        return jsonify({'response':[modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]], 'index': index, 'filename': f.filename})
+        return jsonify({'response':" or ".join([modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]]).capitalize(), 'index': index, 'filename': f.filename})
 
 
 class UserAPI(Resource):
