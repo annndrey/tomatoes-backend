@@ -63,7 +63,7 @@ using_data_transform = transforms.Compose([
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-modres = ( { 0 : "this is not a tomato", 1 : "looks like a tomato" },
+modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
            { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
            { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
 )
@@ -243,16 +243,17 @@ class StatsAPI(Resource):
     def post(self):
         auth_headers = request.headers.get('Authorization', '').split()
         token = auth_headers[1]
-        data = jwt.decode(token, current_app.config['SECRET_KEY'])
-        user = User.query.filter_by(login=data['sub']).first()
+        udata = jwt.decode(token, current_app.config['SECRET_KEY'])
+        user = User.query.filter_by(login=udata['sub']).first()
         fpath = os.path.join(current_app.config['FILE_PATH'], user.login)
-        
+        maxqueryage = current_app.config['QUERY_AGE']
         if not user:
             return abort(403)
         
         index = request.form['index']
         f = request.files['file']
         data = f.read()
+        fsize = len(data)
         imgext = os.path.splitext(f.filename)[-1]
         
         if not os.path.exists(fpath):
@@ -261,43 +262,55 @@ class StatsAPI(Resource):
         fuuid = str(uuid.uuid4())
         fname = fuuid + imgext
 
-        exists = db.session.query(UserQuery).filter(UserQuery.local_name == fname).first()
-        if  exists:
-            fuuid = uuid.uuid4()
-            fname = fuuid + imgext
+        prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == f.filename).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
+        if prevquery and prevquery.queryage <= maxqueryage:
+            # return existing data without calculating
+            resp = json.loads(prevquery.result)
+        else:
+            fullpath = os.path.join(fpath, fname)
 
-        fullpath = os.path.join(fpath, fname)
+            with open(fullpath, 'wb') as outf:
+                outf.write(data)
+        
+            img_pil = Image.open(io.BytesIO(data))
+            img_tensor = using_data_transform(img_pil)
+            img_tensor.unsqueeze_(0)
+            img_variable = img_tensor
+            result = {}
+        
+            for model in aimodels:
+                outputs = model(img_variable)
+                _, preds = torch.max(outputs, 1)
+                key = f.filename
+                if key in result:
+                    result[key].append( int(preds) )
+                else:
+                    result[key]= [int(preds)]
 
-        with open(fullpath, 'wb') as outf:
-            outf.write(data)
-        
-        img_pil = Image.open(io.BytesIO(data))
-        img_tensor = using_data_transform(img_pil)
-        img_tensor.unsqueeze_(0)
-        img_variable = img_tensor
-        result = {}
-        
-        for model in aimodels:
-            outputs = model(img_variable)
-            _, preds = torch.max(outputs, 1)
-            key = f.filename
-            if key in result:
-                result[key].append( int(preds) )
+            # Plant: Tomato/Not tomato
+            # Status: Health/Unhealthy
+            # if tomato:
+            resdata = result[f.filename]
+            planttype = ""
+            plantstatus = ""
+            if  resdata[0] == 0:
+                planttype = "Not tomato"
+                if resdata[2] == 0:
+                    plantstatus = "Healthy"
+                else:
+                    plantstatus = "Unhealthy"
             else:
-                result[key]= [int(preds)]
-                
-  
-        # create new UserQuery here
-        # >>>>
-        # add user query to the history
-        # save file to the path with uuid and orig fname
-        # save the result
-        
-        resp  = {'response':" or ".join([modres[0][result[f.filename][0]], modres[1][result[f.filename][1]], modres[2][result[f.filename][2]]]).capitalize(), 'index': index, 'filename': f.filename}
+                planttype = "Tomato"
+                if resdata[1] == 0:
+                    plantstatus = "Healthy"
+                else:
+                    plantstatus = "Unhealthy"
 
-        newquery = UserQuery(local_name=fname, orig_name=f.filename, user=user, result=json.dumps(resp))
-        db.session.add(newquery)
-        db.session.commit()
+            resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
+
+            newquery = UserQuery(local_name=fname, orig_name=f.filename, user=user, result=json.dumps(resp), fsize=fsize)
+            db.session.add(newquery)
+            db.session.commit()
         
         return jsonify(resp)
 
