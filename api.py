@@ -251,7 +251,7 @@ class StatsAPI(Resource):
             return abort(403)
         
         index = request.form['index']
-        f = request.files['file']
+        f = request.files['croppedfile']
         data = f.read()
         fsize = len(data)
         imgext = os.path.splitext(f.filename)[-1]
@@ -265,8 +265,10 @@ class StatsAPI(Resource):
         prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == f.filename).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
         if prevquery and prevquery.queryage <= maxqueryage:
             # return existing data without calculating
+            print("SAVED RESULTS")
             resp = json.loads(prevquery.result)
         else:
+            print("NEW RESULTS")
             fullpath = os.path.join(fpath, fname)
 
             with open(fullpath, 'wb') as outf:
@@ -306,6 +308,7 @@ class StatsAPI(Resource):
                 else:
                     plantstatus = "Unhealthy"
 
+            
             resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
 
             newquery = UserQuery(local_name=fname, orig_name=f.filename, user=user, result=json.dumps(resp), fsize=fsize)
