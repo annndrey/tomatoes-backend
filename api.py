@@ -249,21 +249,22 @@ class StatsAPI(Resource):
         maxqueryage = current_app.config['QUERY_AGE']
         if not user:
             return abort(403)
-        
         index = request.form['index']
+        orig_name = request.form['filename']
         f = request.files['croppedfile']
         data = f.read()
         fsize = len(data)
         imgext = os.path.splitext(f.filename)[-1]
-        
+        #print(1)
         if not os.path.exists(fpath):
             os.makedirs(fpath)
-            
+        #print(2)
         fuuid = str(uuid.uuid4())
         fname = fuuid + imgext
-
-        prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == f.filename).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
+        #print(3)
+        prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == orig_name).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
         if prevquery and prevquery.queryage <= maxqueryage:
+            #print(11)
             # return existing data without calculating
             print("SAVED RESULTS")
             resp = json.loads(prevquery.result)
@@ -273,13 +274,16 @@ class StatsAPI(Resource):
 
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
-        
+            #print(4)
+            # AI Section start
             img_pil = Image.open(io.BytesIO(data))
+            print(img_pil)
+            #print(5)
             img_tensor = using_data_transform(img_pil)
             img_tensor.unsqueeze_(0)
             img_variable = img_tensor
             result = {}
-        
+            #print(6)
             for model in aimodels:
                 outputs = model(img_variable)
                 _, preds = torch.max(outputs, 1)
@@ -288,13 +292,15 @@ class StatsAPI(Resource):
                     result[key].append( int(preds) )
                 else:
                     result[key]= [int(preds)]
-
+             # AI Section ends
+            #print(7)
             # Plant: Tomato/Not tomato
             # Status: Health/Unhealthy
             # if tomato:
             resdata = result[f.filename]
             planttype = ""
             plantstatus = ""
+            #print(8)
             if  resdata[0] == 0:
                 planttype = "Not tomato"
                 if resdata[2] == 0:
@@ -308,13 +314,14 @@ class StatsAPI(Resource):
                 else:
                     plantstatus = "Unhealthy"
 
-            
+            #print(9)
             resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
 
-            newquery = UserQuery(local_name=fname, orig_name=f.filename, user=user, result=json.dumps(resp), fsize=fsize)
+            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
-        
+            #print(10)
+        print(jsonify(resp))
         return jsonify(resp)
 
 
