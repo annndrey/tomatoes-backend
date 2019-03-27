@@ -52,45 +52,74 @@ ma = Marshmallow(app)
 # _____________________ AI Section _____________________
 
 tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
+leaf_or_not_path = app.config['LEAF_OR_NOT_PATH']
 plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
 tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
+resize = (224,224)
+
 using_data_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    transforms.Resize(resize, interpolation=2),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+pil_transform = transforms.Compose([
+    transforms.Resize(resize, interpolation=2),
+])
 
 modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
            { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
            { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
 )
 
-aimodels = ()
+global aimodels
+aimodels = {}
 
-torch.set_grad_enabled(False)
+all_models = {'leaf_or_not': leaf_or_not_path,
+              'tomat_or_not': tomat_or_not_path,
+              'tomat_health_or_not': tomat_health_or_not_path,
+              'plant_health_or_not': plant_health_or_not_path
+}
 
-def load_pretrained_weights(model, weight_path):
-    """Load pretrianed weights to model
-    Incompatible layers (unmatched in name or size) will be ignored
-    Args:
-    - model (nn.Module): network model, which must not be nn.DataParallel
-    - weight_path (str): path to pretrained weights
-    """
-#    checkpoint = torch.load(weight_path)
-    checkpoint = torch.load(weight_path, map_location='cpu')
+models_to_apply = ("leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
+
+
+def remove_transparency(im, bg_colour=(255, 255, 255)):
+    # Only process if image has
+    # transparency (http://stackoverflow.com/a/1963146)
+    if im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info):
+        # Need to convert to RGBA if LA format
+        # due to a bug in PIL (http://stackoverflow.com/a/1963146)
+        alpha = im.convert('RGBA').split()[-1]
+        # Create a new background image of our matt color.
+        # Must be RGBA because paste requires both images have the same format
+        # (http://stackoverflow.com/a/8720632  and  http://stackoverflow.com/a/9459208)
+        bg = PIL.Image.new("RGB", im.size, bg_colour + (255,))
+        bg.paste(im, mask=alpha)
+        return bg
+    else:
+        return im
+
+
+def load_model_to_continue_froma_state_dict(file_name, gpu_or_cpu='cpu'):
+    print('Loading model for continue training : "{}" to "{}" '.format(file_name, gpu_or_cpu))
+    assert gpu_or_cpu=='gpu' or gpu_or_cpu=='cpu' 
+    checkpoint = torch.load(file_name, map_location='cpu')
+    print( "Saved entities: ", checkpoint.keys())
     if 'state_dict' in checkpoint:
         state_dict = checkpoint['state_dict']
     else:
         state_dict = checkpoint
+    arch = checkpoint['arch']
+    class_to_idx = checkpoint['class_to_idx']
+    num_classes = len(class_to_idx)
+    model = torchvision.models.__dict__[arch](num_classes=num_classes)
     model_dict = model.state_dict()
     new_state_dict = OrderedDict()
     matched_layers, discarded_layers = [], []
     for k, v in state_dict.items():
-        # If the pretrained state_dict was saved as nn.DataParallel,
-        # keys would contain "module.", which should be ignored.
         if k.startswith('module.'):
             k = k[7:]
         if k in model_dict and model_dict[k].size() == v.size():
@@ -100,30 +129,28 @@ def load_pretrained_weights(model, weight_path):
             discarded_layers.append(k)
     model_dict.update(new_state_dict)
     model.load_state_dict(model_dict)
+    model.class_to_idx = class_to_idx
     if len(matched_layers) == 0:
-        warnings.warn('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
+        print('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
     else:
-        print('Successfully loaded pretrained weights from "{}"'.format(weight_path))
+        print('Successfully loaded pretrained weights from "{}":\n"{}"'.format(file_name, matched_layers))
         if len(discarded_layers) > 0:
-            print("** The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            print("!!!!!! The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            return
+
+    if gpu_or_cpu=='gpu':
+        print("Transfering models to GPU(s)")
+        model = torch.nn.DataParallel(model_pretrained).cuda()
+    return model
 
             
 @app.before_first_request            
 def loadmodels():
-    print("loading models")
-    tomat_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_or_not_model, tomat_or_not_path)
-    tomat_or_not_model.eval()
-
-    plant_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(plant_health_or_not_model, plant_health_or_not_path)
-    plant_health_or_not_model.eval()
-
-    tomat_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_health_or_not_model, tomat_health_or_not_path)
-    tomat_health_or_not_model.eval()
-    global aimodels
-    aimodels = (tomat_or_not_model, tomat_health_or_not_model, plant_health_or_not_model)
+   
+    for k in models_to_apply:
+        amodel = load_model_to_continue_froma_state_dict( all_models[k])
+        amodel.eval()
+        aimodels[k] = amodel
 
 # _____________________ AI Section _____________________
 
@@ -249,12 +276,13 @@ class StatsAPI(Resource):
         maxqueryage = current_app.config['QUERY_AGE']
         if not user:
             return abort(403)
+
         index = request.form['index']
         orig_name = request.form['filename']
         f = request.files['croppedfile']
         data = f.read()
         fsize = len(data)
-        imgext = os.path.splitext(f.filename)[-1]
+        imgext = os.path.splitext(f.filename)[-1].lower()
         #print(1)
         if not os.path.exists(fpath):
             os.makedirs(fpath)
@@ -277,22 +305,33 @@ class StatsAPI(Resource):
             #print(4)
             # AI Section start
             img_pil = Image.open(io.BytesIO(data))
-            print(img_pil)
-            #print(5)
+            if imgext == '.png':
+                img_pil = remove_transparency(img_pil)
+
             img_tensor = using_data_transform(img_pil)
             img_tensor.unsqueeze_(0)
             img_variable = img_tensor
             result = {}
-            #print(6)
-            for model in aimodels:
+            # passing the image to models
+            # and getting back the result
+            for mod_name, model in aimodels.items():
+                # inverted dict
+                idx_to_class = {v: k for k, v in model.class_to_idx.items()}
+                        
                 outputs = model(img_variable)
                 _, preds = torch.max(outputs, 1)
+                
+                detected_img_type = idx_to_class[int(preds)]
+                
                 key = f.filename
+                
                 if key in result:
-                    result[key].append( int(preds) )
+                    result[key][mod_name] = detected_img_type
                 else:
-                    result[key]= [int(preds)]
-             # AI Section ends
+                    result[key] = {mod_name: detected_img_type}
+
+            print('RESULT', result)
+            # AI Section ends
             #print(7)
             # Plant: Tomato/Not tomato
             # Status: Health/Unhealthy
@@ -300,28 +339,35 @@ class StatsAPI(Resource):
             resdata = result[f.filename]
             planttype = ""
             plantstatus = ""
+            picttype = ""
+            
             #print(8)
-            if  resdata[0] == 0:
+            if resdata["leaf_or_not"] == "leaf":
+                picttype = "Leaf"
+            else:
+                picttype = "Not a leaf"
+                
+            if  resdata["tomat_or_not"] != "tomat":
                 planttype = "Not tomato"
-                if resdata[2] == 0:
+                if resdata["plant_health_or_not"] == "plants_healthy":
                     plantstatus = "Healthy"
                 else:
                     plantstatus = "Unhealthy"
             else:
                 planttype = "Tomato"
-                if resdata[1] == 0:
+                if resdata["tomat_health_or_not"] == "tomat_healthy":
                     plantstatus = "Healthy"
                 else:
                     plantstatus = "Unhealthy"
 
             #print(9)
-            resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
+            resp  = {'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
 
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
             #print(10)
-        print(jsonify(resp))
+        print(resp)
         return jsonify(resp)
 
 
