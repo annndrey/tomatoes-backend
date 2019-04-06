@@ -51,10 +51,12 @@ ma = Marshmallow(app)
 
 # _____________________ AI Section _____________________
 
-tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
+plant_or_not_path = app.config['PLANT_OR_NOT_PATH']
 leaf_or_not_path = app.config['LEAF_OR_NOT_PATH']
+tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
 plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
 tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
+
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
 resize = (224,224)
@@ -75,16 +77,28 @@ modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
 )
 
 global aimodels
+
 aimodels = {}
 
-all_models = {'leaf_or_not': leaf_or_not_path,
-              'tomat_or_not': tomat_or_not_path,
-              'tomat_health_or_not': tomat_health_or_not_path,
-              'plant_health_or_not': plant_health_or_not_path
+all_models = {
+    'plant_or_not': plant_or_not_path,
+    'leaf_or_not': leaf_or_not_path,
+    'tomat_or_not': tomat_or_not_path,
+    'tomat_health_or_not': tomat_health_or_not_path,
+    'plant_health_or_not': plant_health_or_not_path
 }
 
-models_to_apply = ("leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
+models_to_apply = ("plant_or_not", "leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
 
+def get_model_results(modelname, results, img):
+    model = aimodels[modelname]
+    idx_to_class = {v: k for k, v in model.class_to_idx.items()}
+    print("MODEL", idx_to_class)
+    outputs = model(img)
+    _, preds = torch.max(outputs, 1)
+    detected_img_type = idx_to_class[int(preds)]
+    results[modelname] = detected_img_type
+    return results
 
 def remove_transparency(im, bg_colour=(255, 255, 255)):
     # Only process if image has
@@ -268,6 +282,7 @@ class StatsAPI(Resource):
     @token_required
     @cross_origin()
     def post(self):
+        print("REQUEST", request.remote_addr)
         auth_headers = request.headers.get('Authorization', '').split()
         token = auth_headers[1]
         udata = jwt.decode(token, current_app.config['SECRET_KEY'])
@@ -314,59 +329,57 @@ class StatsAPI(Resource):
             result = {}
             # passing the image to models
             # and getting back the result
-            for mod_name, model in aimodels.items():
-                # inverted dict
-                idx_to_class = {v: k for k, v in model.class_to_idx.items()}
-                        
-                outputs = model(img_variable)
-                _, preds = torch.max(outputs, 1)
+
+            # 1. plant / non plant 
+            # if not plant:
+            # return result
+            # if plant:
+            # 2. leaf / non leaf
+            # if not leaf:
+            # return result
+            # if leaf:
+            # 3. tomato / non tomato
+            # if tomato:
+            # 4. tomato healthy / unhealthy
+            # if not tomato:
+            # 5. plant healthy / unhealthy
+
+            print("1 Plant / non plant")
+            result = get_model_results('plant_or_not', result, img_variable)
+            
+            if result['plant_or_not'] == "plant":
+                print("Leaf / non leaf")
+
+                result = get_model_results('leaf_or_not', result, img_variable)
                 
-                detected_img_type = idx_to_class[int(preds)]
+                if result['leaf_or_not'] == "leaf":
+                    print("tomato / non tomato")
+                    result = get_model_results('tomat_or_not', result, img_variable)
+
+                    if result['tomat_or_not'] == "tomat":
+                        print("health_tomato or not")
+                        result = get_model_results('tomat_health_or_not', result, img_variable)
+                    else:
+                        print("health_plant or not")
+                        result = get_model_results('plant_health_or_not', result, img_variable)
                 
-                key = f.filename
-                
-                if key in result:
-                    result[key][mod_name] = detected_img_type
-                else:
-                    result[key] = {mod_name: detected_img_type}
 
             print('RESULT', result)
             # AI Section ends
-            #print(7)
-            # Plant: Tomato/Not tomato
-            # Status: Health/Unhealthy
-            # if tomato:
-            resdata = result[f.filename]
-            planttype = ""
-            plantstatus = ""
-            picttype = ""
             
-            #print(8)
-            if resdata["leaf_or_not"] == "leaf":
-                picttype = "Leaf"
-            else:
-                picttype = "Not a leaf"
-                
-            if  resdata["tomat_or_not"] != "tomat":
-                planttype = "Not tomato"
-                if resdata["plant_health_or_not"] == "plants_healthy":
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
-            else:
-                planttype = "Tomato"
-                if resdata["tomat_health_or_not"] == "tomat_healthy":
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
-
-            #print(9)
-            resp  = {'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
+            objtype = result.get("plant_or_not", "non_plant")
+            picttype = result.get("leaf_or_not", "not_single_leaf")
+            planttype = result.get("tomat_or_not", "non_tomat")
+            tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
+            plantstatus = result.get("plant_health_or_not", "plants_non_health")
+            
+            resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
+            print("RESP", resp)
 
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
-            #print(10)
+
         print(resp)
         return jsonify(resp)
 
@@ -484,4 +497,5 @@ def adduser(login, password, name, phone):
 
                 
 if __name__ == '__main__':
+    app.debug = True
     app.run(host='0.0.0.0')
