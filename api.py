@@ -38,6 +38,9 @@ from PIL import Image
 import glob
 from collections import OrderedDict
 
+from imgaug import augmenters as iaa #AL added 2905
+import numpy as np  #AL added 2905
+
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}}, support_credentials=True, methods=['GET', 'POST', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
@@ -59,17 +62,52 @@ tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
 
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
-resize = (224,224)
+#AL added 2905
+#resize = (224,224)
+resize = 224
+from imgaug import augmenters as iaa
+class ImgResizeAndPad:
+    #max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
+#max_ratio_change - maximum relative increase of the short side toward square size (with probability 0.5). Set it to 1 to keep the aspect ratio of the img always.
+    def __init__(self, resize=224, max_ratio_change = 1.2):
+        self.max_ratio_change = max_ratio_change
+        self.resize = resize
+        self.pad = iaa.size.PadToFixedSize(width = resize, height = resize, pad_mode='constant', pad_cval=0, position='center')
+    def __call__(self, img):
+        img = np.array(img)
+        (h,w) = img.shape[0:2]
+        keep_h=False
+        M = w
+        m = h
+        if h>w :
+            keep_h=True
+            M = h
+            m = w
+        if self.max_ratio_change > 1:
+            new_m = int(m*self.max_ratio_change*self.resize/M)
+            if new_m>self.resize: new_m=self.resize
+        else:
+            new_m = int(m*self.resize/M)
+        if keep_h:
+            resize_to_square = iaa.Resize({"height": self.resize, "width": new_m})
+        else:
+            resize_to_square = iaa.Resize({"height": new_m, "width": self.resize})
+        img = resize_to_square.augment_image( img )
+        img = self.pad.augment_image( img )
+        return img
 
-using_data_transform = transforms.Compose([
-    transforms.Resize(resize, interpolation=2),
+only_make_square_transform = transforms.Compose([
+    ImgResizeAndPad(resize=resize),
+#    lambda x: PIL.Image.fromarray(x),
+    lambda x: Image.fromarray(x),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-
-pil_transform = transforms.Compose([
-    transforms.Resize(resize, interpolation=2),
-])
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) ])
+#AL it was before 2905
+#using_data_transform = transforms.Compose([
+#    transforms.Resize(resize, interpolation=2),
+#    transforms.ToTensor(),
+#    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+#])
 
 modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
            { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
@@ -323,7 +361,8 @@ class StatsAPI(Resource):
             if imgext == '.png':
                 img_pil = remove_transparency(img_pil)
 
-            img_tensor = using_data_transform(img_pil)
+#            img_tensor = using_data_transform(img_pil)
+            img_tensor = only_make_square_transform(img_pil)
             img_tensor.unsqueeze_(0)
             img_variable = img_tensor
             result = {}
