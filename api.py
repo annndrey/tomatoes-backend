@@ -55,19 +55,18 @@ ma = Marshmallow(app)
 # _____________________ AI Section _____________________
 
 plant_or_not_path = app.config['PLANT_OR_NOT_PATH']
-leaf_or_not_path = app.config['LEAF_OR_NOT_PATH']
-tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
-plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
-tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
+potato_fit_or_not_path = app.config['POTATO_FIT_OR_NOT_PATH']
+#leaf_or_not_path = app.config['LEAF_OR_NOT_PATH']
+#tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
+#plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
+#tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
 
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
-#AL added 2905
-#resize = (224,224)
 resize = 224
 from imgaug import augmenters as iaa
 class ImgResizeAndPad:
-    #max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
+#max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
 #max_ratio_change - maximum relative increase of the short side toward square size (with probability 0.5). Set it to 1 to keep the aspect ratio of the img always.
     def __init__(self, resize=224, max_ratio_change = 1.2):
         self.max_ratio_change = max_ratio_change
@@ -102,17 +101,6 @@ only_make_square_transform = transforms.Compose([
     lambda x: Image.fromarray(x),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) ])
-#AL it was before 2905
-#using_data_transform = transforms.Compose([
-#    transforms.Resize(resize, interpolation=2),
-#    transforms.ToTensor(),
-#    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-#])
-
-modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
-           { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
-           { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
-)
 
 global aimodels
 
@@ -120,13 +108,15 @@ aimodels = {}
 
 all_models = {
     'plant_or_not': plant_or_not_path,
-    'leaf_or_not': leaf_or_not_path,
-    'tomat_or_not': tomat_or_not_path,
-    'tomat_health_or_not': tomat_health_or_not_path,
-    'plant_health_or_not': plant_health_or_not_path
+    'potato_fit_or_not': potato_fit_or_not_path
+#    'leaf_or_not': leaf_or_not_path,
+#    'tomat_or_not': tomat_or_not_path,
+#    'tomat_health_or_not': tomat_health_or_not_path,
+#    'plant_health_or_not': plant_health_or_not_path
 }
 
-models_to_apply = ("plant_or_not", "leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
+#models_to_apply = ("plant_or_not", "leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
+models_to_apply = ("plant_or_not", "potato_fit_or_not")
 
 def get_model_results(modelname, results, img):
     model = aimodels[modelname]
@@ -387,32 +377,36 @@ class StatsAPI(Resource):
             result = get_model_results('plant_or_not', result, img_variable)
             
             if result['plant_or_not'] == "plant":
-                print("Leaf / non leaf")
-
-                result = get_model_results('leaf_or_not', result, img_variable)
-                
-                if result['leaf_or_not'] == "leaf":
-                    print("tomato / non tomato")
-                    result = get_model_results('tomat_or_not', result, img_variable)
-
-                    if result['tomat_or_not'] == "tomat":
-                        print("health_tomato or not")
-                        result = get_model_results('tomat_health_or_not', result, img_variable)
-                    else:
-                        print("health_plant or not")
-                        result = get_model_results('plant_health_or_not', result, img_variable)
+                print("Potato fitoftora / non fito")
+                result = get_model_results('potato_fit_or_not', result, img_variable)
+#
+#                print("Leaf / non leaf")
+#                result = get_model_results('leaf_or_not', result, img_variable)
+#                if result['leaf_or_not'] == "leaf":
+#                    print("tomato / non tomato")
+#                    result = get_model_results('tomat_or_not', result, img_variable)
+#
+#                    if result['tomat_or_not'] == "tomat":
+#                        print("health_tomato or not")
+#                        result = get_model_results('tomat_health_or_not', result, img_variable)
+#                    else:
+#                        print("health_plant or not")
+#                        result = get_model_results('plant_health_or_not', result, img_variable)
                 
 
             print('RESULT', result)
             # AI Section ends
             
-            objtype = result.get("plant_or_not", "non_plant")
-            picttype = result.get("leaf_or_not", "not_single_leaf")
-            planttype = result.get("tomat_or_not", "non_tomat")
-            tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
-            plantstatus = result.get("plant_health_or_not", "plants_non_health")
+            objtype = result.get("plant_or_not")
+            fito_status = result.get("potato_fit_or_not")
+#            objtype = result.get("plant_or_not", "non_plant")
+#            picttype = result.get("leaf_or_not", "not_single_leaf")
+#            planttype = result.get("tomat_or_not", "non_tomat")
+#            tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
+#            plantstatus = result.get("plant_health_or_not", "plants_non_health")
             
-            resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
+#            resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
+            resp  = {'objtype': objtype, 'fito_status': fito_status, 'index': index, 'filename': orig_name}
             print("RESP", resp)
 
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
