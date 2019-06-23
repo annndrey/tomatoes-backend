@@ -365,7 +365,7 @@ class StatsAPI(Resource):
             app.logger.info("PREV REQUESTS")
             recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
             numrequests = len(recentrequests)
-            if numrequests > 2:
+            if numrequests > 10:
                 app.logger.info('Too many requests')
                 abort(429, message='Too many requests, try again later')
                 
