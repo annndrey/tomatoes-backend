@@ -351,10 +351,14 @@ class StatsAPI(Resource):
         # if it was more than 3 requests in last 10 minutes,
         # return 429 too many requests
         now = datetime.datetime.now()
-        tenminutesbefore = now - datetime.timedelta(minutes=10)
+        sometimebefore = now - datetime.timedelta(minutes=10)
         if remoteip:
-            numrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp >= tenminutesbefore).count()
-            if numrequests > 3:
+            print("PREV REQUESTS")
+            recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
+            numrequests = len(recentrequests)
+            for rq in recentrequests:
+                print(rq.timestamp)
+            if numrequests > 2:
                 print('Too many requests')
                 abort(429, message='Too many requests, try again later')
                 
@@ -426,7 +430,7 @@ class StatsAPI(Resource):
             tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
             plantstatus = result.get("plant_health_or_not", "plants_non_health")
             resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
-
+            print('saving query', remoteip, user)
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
