@@ -16,3 +16,6 @@ TOMAT_HEALTH_OR_NOT_PATH = "/home/anton/fermata/codes/a_leaf_classifier/trained_
 USING_MODEL_NAME = 'vgg19'
 NUM_CLASSES_USED = 2
 QUERY_AGE = 432000
+
+BLOCKTIME = 10
+BLOCKREQUESTS = 10
