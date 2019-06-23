@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#Ю -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from functools import wraps
 from flask import Flask, g, make_response, request, current_app
@@ -19,6 +19,7 @@ from models import db, User, UserQuery
 
 import os
 import uuid
+import logging
 
 import click
 import datetime
@@ -42,6 +43,7 @@ from imgaug import augmenters as iaa #AL added 2905
 import numpy as np  #AL added 2905
 
 
+
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}}, support_credentials=True, methods=['GET', 'POST', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
 api = Api(app, prefix="/api/v1")
@@ -51,6 +53,12 @@ app.config['PROPAGATE_EXCEPTIONS'] = True
 db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
+
+if __name__ != "__main__":
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+
 
 # _____________________ AI Section _____________________
 
@@ -131,7 +139,7 @@ models_to_apply = ("plant_or_not", "leaf_or_not", "tomat_or_not", "tomat_health_
 def get_model_results(modelname, results, img):
     model = aimodels[modelname]
     idx_to_class = {v: k for k, v in model.class_to_idx.items()}
-    print("MODEL", idx_to_class)
+    app.logger.debug(f"MODEL {idx_to_class}")
     outputs = model(img)
     _, preds = torch.max(outputs, 1)
     detected_img_type = idx_to_class[int(preds)]
@@ -156,10 +164,11 @@ def remove_transparency(im, bg_colour=(255, 255, 255)):
 
 
 def load_model_to_continue_froma_state_dict(file_name, gpu_or_cpu='cpu'):
-    print('Loading model for continue training : "{}" to "{}" '.format(file_name, gpu_or_cpu))
+
+    app.logger.info('Loading model for continue training : "{}" to "{}" '.format(file_name, gpu_or_cpu))
     assert gpu_or_cpu=='gpu' or gpu_or_cpu=='cpu' 
     checkpoint = torch.load(file_name, map_location='cpu')
-    print( "Saved entities: ", checkpoint.keys())
+    app.logger.info( "Saved entities: {}".format( checkpoint.keys()))
     if 'state_dict' in checkpoint:
         state_dict = checkpoint['state_dict']
     else:
@@ -183,15 +192,15 @@ def load_model_to_continue_froma_state_dict(file_name, gpu_or_cpu='cpu'):
     model.load_state_dict(model_dict)
     model.class_to_idx = class_to_idx
     if len(matched_layers) == 0:
-        print('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
+        app.logger.info('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
     else:
-        print('Successfully loaded pretrained weights from "{}":\n"{}"'.format(file_name, matched_layers))
+        app.logger.info('Successfully loaded pretrained weights from "{}":\n"{}"'.format(file_name, matched_layers))
         if len(discarded_layers) > 0:
-            print("!!!!!! The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            app.logger.info("!!!!!! The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
             return
 
     if gpu_or_cpu=='gpu':
-        print("Transfering models to GPU(s)")
+        app.logger.info("Transfering models to GPU(s)")
         model = torch.nn.DataParallel(model_pretrained).cuda()
     return model
 
@@ -353,22 +362,20 @@ class StatsAPI(Resource):
         now = datetime.datetime.now()
         sometimebefore = now - datetime.timedelta(minutes=10)
         if remoteip:
-            print("PREV REQUESTS")
+            app.logger.info("PREV REQUESTS")
             recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
             numrequests = len(recentrequests)
-            for rq in recentrequests:
-                print(rq.timestamp)
             if numrequests > 2:
-                print('Too many requests')
+                app.logger.info('Too many requests')
                 abort(429, message='Too many requests, try again later')
                 
         if prevquery and prevquery.queryage <= maxqueryage:
             #print(11)
             # return existing data without calculating
-            print("SAVED RESULTS")
+            app.logger.info("Serving saved results")
             resp = json.loads(prevquery.result)
         else:
-            print("NEW RESULTS")
+            app.logger.info("NEW RESULTS")
             fullpath = os.path.join(fpath, fname)
 
             with open(fullpath, 'wb') as outf:
@@ -401,27 +408,27 @@ class StatsAPI(Resource):
             # if not tomato:
             # 5. plant healthy / unhealthy
 
-            print("1 Plant / non plant")
+            app.logger.info("1 Plant / non plant")
             result = get_model_results('plant_or_not', result, img_variable)
             
             if result['plant_or_not'] == "plant":
-                print("Leaf / non leaf")
+                app.logger.info("Leaf / non leaf")
 
                 result = get_model_results('leaf_or_not', result, img_variable)
                 
                 if result['leaf_or_not'] == "leaf":
-                    print("tomato / non tomato")
+                    app.logger.info("tomato / non tomato")
                     result = get_model_results('tomat_or_not', result, img_variable)
 
                     if result['tomat_or_not'] == "tomat":
-                        print("health_tomato or not")
+                        app.logger.info("health_tomato or not")
                         result = get_model_results('tomat_health_or_not', result, img_variable)
                     else:
-                        print("health_plant or not")
+                        app.logger.info("health_plant or not")
                         result = get_model_results('plant_health_or_not', result, img_variable)
                 
 
-            print('RESULT', result)
+            app.logger.info('RESULT {}'.format( result))
             # AI Section ends
             
             objtype = result.get("plant_or_not", "non_plant")
@@ -430,7 +437,7 @@ class StatsAPI(Resource):
             tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
             plantstatus = result.get("plant_health_or_not", "plants_non_health")
             resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
-            print('saving query', remoteip, user)
+            app.logger.info(f'saving query {remoteip} {user}')
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
@@ -547,7 +554,8 @@ def adduser(login, password, name, phone):
     newuser.confirmed_on = datetime.datetime.today()
     db.session.add(newuser)
     db.session.commit()
-    print("New user added", newuser)
+
+    app.logger.info("New user added", newuser)
 
                 
 if __name__ == '__main__':
