@@ -411,11 +411,14 @@ class StatsAPI(Resource):
             planttype = result.get("tomat_or_not", "non_tomat")
             tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
             plantstatus = result.get("plant_health_or_not", "plants_non_health")
-            
             resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
             print("RESP", resp)
+            if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
+                remoteip = request.environ['REMOTE_ADDR']
+            else:
+                remoteip = request.environ['HTTP_X_FORWARDED_FOR']
 
-            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
+            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
 
