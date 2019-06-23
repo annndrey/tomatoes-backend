@@ -70,6 +70,9 @@ tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
 
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
+
+BLOCKTIME = app.config['BLOCKTIME']
+BLOCKREQUESTS = app.config['BLOCKREQUESTS']
 #AL added 2905
 #resize = (224,224)
 resize = 224
@@ -360,12 +363,12 @@ class StatsAPI(Resource):
         # if it was more than 3 requests in last 10 minutes,
         # return 429 too many requests
         now = datetime.datetime.now()
-        sometimebefore = now - datetime.timedelta(minutes=10)
+        sometimebefore = now - datetime.timedelta(minutes=BLOCKTIME)
         if remoteip:
             app.logger.info("PREV REQUESTS")
             recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
             numrequests = len(recentrequests)
-            if numrequests > 10:
+            if numrequests > BLOCKREQUESTS:
                 app.logger.info('Too many requests')
                 abort(429, message='Too many requests, try again later')
                 
