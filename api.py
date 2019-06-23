@@ -320,13 +320,13 @@ class StatsAPI(Resource):
     @token_required
     @cross_origin()
     def post(self):
-        print("REQUEST", request.remote_addr)
         auth_headers = request.headers.get('Authorization', '').split()
         token = auth_headers[1]
         udata = jwt.decode(token, current_app.config['SECRET_KEY'])
         user = User.query.filter_by(login=udata['sub']).first()
         fpath = os.path.join(current_app.config['FILE_PATH'], user.login)
         maxqueryage = current_app.config['QUERY_AGE']
+        remoteip = None
         if not user:
             return abort(403)
 
@@ -336,14 +336,28 @@ class StatsAPI(Resource):
         data = f.read()
         fsize = len(data)
         imgext = os.path.splitext(f.filename)[-1].lower()
-        #print(1)
         if not os.path.exists(fpath):
             os.makedirs(fpath)
-        #print(2)
         fuuid = str(uuid.uuid4())
         fname = fuuid + imgext
-        #print(3)
         prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == orig_name).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
+        # The service is running under nginx proxy, so the simple
+        # request.remote_ipaddr would always return 127.0.0.1
+        if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
+            remoteip = request.environ['REMOTE_ADDR']
+        else:
+            remoteip = request.environ['HTTP_X_FORWARDED_FOR']
+
+        # if it was more than 3 requests in last 10 minutes,
+        # return 429 too many requests
+        now = datetime.datetime.now()
+        tenminutesbefore = now - datetime.timedelta(minutes=10)
+        if remoteip:
+            numrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp >= tenminutesbefore).count()
+            if numrequests > 3:
+                print('Too many requests')
+                abort(429, message='Too many requests, try again later')
+                
         if prevquery and prevquery.queryage <= maxqueryage:
             #print(11)
             # return existing data without calculating
@@ -412,17 +426,11 @@ class StatsAPI(Resource):
             tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
             plantstatus = result.get("plant_health_or_not", "plants_non_health")
             resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
-            print("RESP", resp)
-            if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
-                remoteip = request.environ['REMOTE_ADDR']
-            else:
-                remoteip = request.environ['HTTP_X_FORWARDED_FOR']
 
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
 
-        print(resp)
         return jsonify(resp)
 
 
