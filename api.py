@@ -238,7 +238,11 @@ def token_required(f):
 
         #try:
         token = auth_headers[1]
-        data = jwt.decode(token, current_app.config['SECRET_KEY'])
+        #try:
+        data = jwt.decode(token, current_app.config['SECRET_KEY'], options={'verify_exp': False})
+        #except:
+        #    jwt.exceptions.ExpiredSignatureError:
+        #    abort(403, message="")
         user = User.query.filter_by(login=data['sub']).first()
 
         if not user:
@@ -365,16 +369,18 @@ class StatsAPI(Resource):
         now = datetime.datetime.now()
         sometimebefore = now - datetime.timedelta(minutes=BLOCKTIME)
         if remoteip:
-            app.logger.info("PREV REQUESTS")
+
             recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
             numrequests = len(recentrequests)
-            if numrequests > BLOCKREQUESTS:
+            if numrequests >= BLOCKREQUESTS:
+                app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
                 app.logger.info('Too many requests')
                 abort(429, message='Too many requests, try again later')
                 
         if prevquery and prevquery.queryage <= maxqueryage:
             #print(11)
             # return existing data without calculating
+            app.logger.info("PREV REQUESTS")
             app.logger.info("Serving saved results")
             resp = json.loads(prevquery.result)
         else:
