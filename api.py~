@@ -206,7 +206,7 @@ class StatsAPI(Resource):
         remoteip = request.remote_addr
         if not user:
             return abort(403)
-        app.logger.debug(request.form)
+
         cf_threshold = request.form.get('inputThreshold', None)
         min_image_size = request.form.get('inputMinSize', None)
         pred_mode = request.form.get('inputMode', None)
@@ -214,10 +214,10 @@ class StatsAPI(Resource):
         if all([cf_threshold, min_image_size, pred_mode]):
             cfg.merge_from_file(CONFIG_FILE)
             cfg.merge_from_list(["MODEL.DEVICE", MODE])
-            coco = predictor.COCODemo(
+            cocoo = predictor.COCODemo(
                 cfg,
-                min_image_size=int(min_image_size),
-                confidence_threshold=float(cf_threshold),
+                min_image_size=min_image_size,
+                confidence_threshold=cf_threshold,
             )
         else:
             coco = coco_demo
