@@ -3,7 +3,6 @@
 
 from functools import wraps
 from flask import Flask, g, make_response, request, current_app
-from flask import abort as fabort
 from flask_restful import Resource, Api, reqparse, abort, marshal_with
 from flask.json import jsonify
 from flask_migrate import Migrate
@@ -29,18 +28,18 @@ from dateutil.relativedelta import relativedelta
 import jwt
 import json
 
+# AI
+import torch
+import torchvision
+from torchvision import datasets, models, transforms
 
 import io
 import requests
 from PIL import Image
 import glob
 from collections import OrderedDict
-
-import numpy as np  #AL added 2905
-
-# from predict.py
-from maskrcnn_benchmark.config import cfg
-import predictor
+from imgaug import augmenters as iaa 
+import numpy as np 
 
 
 app = Flask(__name__)
@@ -53,32 +52,152 @@ db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
 
-MODE = app.config['MODE']
-CONFIG_FILE = app.config['CONFIG_FILE']
-CF_THRESHOLD = app.config['CF_THRESHOLD']
-MIN_IMAGE_SIZE = app.config['MIN_IMAGE_SIZE']
-BLOCKTIME = app.config['BLOCKTIME']
-BLOCKREQUESTS = app.config['BLOCKREQUESTS']
-FILE_PATH = app.config['FILE_PATH']
-coco_demo = None
-
-
 if __name__ != "__main__":
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
 
 
-@app.before_first_request
-def createpredictor():
-    cfg.merge_from_file(CONFIG_FILE)
-    cfg.merge_from_list(["MODEL.DEVICE", MODE])
-    global coco_demo
-    coco_demo = predictor.COCODemo(
-        cfg,
-        min_image_size=MIN_IMAGE_SIZE,
-        confidence_threshold=CF_THRESHOLD,
-    )
+# _____________________ AI Section _____________________
+
+three_class_model = app.config['THREE_CLASS_MODEL']
+
+using_model_name = app.config['USING_MODEL_NAME']
+num_classes_used = app.config['NUM_CLASSES_USED']
+
+BLOCKTIME = app.config['BLOCKTIME']
+BLOCKREQUESTS = app.config['BLOCKREQUESTS']
+#AL added 2905
+#resize = (224,224)
+resize = 224
+
+class ImgResizeAndPad:
+    #max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
+#max_ratio_change - maximum relative increase of the short side toward square size (with probability 0.5). Set it to 1 to keep the aspect ratio of the img always.
+    def __init__(self, resize=224, max_ratio_change = 1.2):
+        self.max_ratio_change = max_ratio_change
+        self.resize = resize
+        self.pad = iaa.size.PadToFixedSize(width = resize, height = resize, pad_mode='constant', pad_cval=0, position='center')
+    def __call__(self, img):
+        img = np.array(img)
+        (h,w) = img.shape[0:2]
+        keep_h=False
+        M = w
+        m = h
+        if h>w :
+            keep_h=True
+            M = h
+            m = w
+        if self.max_ratio_change > 1:
+            new_m = int(m*self.max_ratio_change*self.resize/M)
+            if new_m>self.resize: new_m=self.resize
+        else:
+            new_m = int(m*self.resize/M)
+        if keep_h:
+            resize_to_square = iaa.Resize({"height": self.resize, "width": new_m})
+        else:
+            resize_to_square = iaa.Resize({"height": new_m, "width": self.resize})
+        img = resize_to_square.augment_image( img )
+        img = self.pad.augment_image( img )
+        return img
+
+only_make_square_transform = transforms.Compose([
+    ImgResizeAndPad(resize=resize),
+    lambda x: Image.fromarray(x),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) ])
+
+modres = ( { 0 : "healthysalad", 1 : "unhealthysalad", 2: "infr" } )
+
+global aimodels
+
+aimodels = {}
+
+all_models = {
+    'three_class_model': three_class_model
+}
+
+models_to_apply = ("three_class_model", )
+
+def get_model_results(modelname, results, img):
+    model = aimodels[modelname]
+    idx_to_class = {v: k for k, v in model.class_to_idx.items()}
+    app.logger.debug(f"MODEL {idx_to_class}")
+    outputs = model(img)
+    _, preds = torch.max(outputs, 1)
+    detected_img_type = idx_to_class[int(preds)]
+    results[modelname] = detected_img_type
+    return results
+
+def remove_transparency(im, bg_colour=(255, 255, 255)):
+    # Only process if image has
+    # transparency (http://stackoverflow.com/a/1963146)
+    if im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info):
+        # Need to convert to RGBA if LA format
+        # due to a bug in PIL (http://stackoverflow.com/a/1963146)
+        alpha = im.convert('RGBA').split()[-1]
+        # Create a new background image of our matt color.
+        # Must be RGBA because paste requires both images have the same format
+        # (http://stackoverflow.com/a/8720632  and  http://stackoverflow.com/a/9459208)
+        bg = PIL.Image.new("RGB", im.size, bg_colour + (255,))
+        bg.paste(im, mask=alpha)
+        return bg
+    else:
+        return im
+
+
+def load_model_to_continue_froma_state_dict(file_name, gpu_or_cpu='cpu'):
+
+    app.logger.info('Loading model for continue training : "{}" to "{}" '.format(file_name, gpu_or_cpu))
+    assert gpu_or_cpu=='gpu' or gpu_or_cpu=='cpu' 
+    checkpoint = torch.load(file_name, map_location='cpu')
+    app.logger.info( "Saved entities: {}".format( checkpoint.keys()))
+    if 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    else:
+        state_dict = checkpoint
+    arch = checkpoint['arch']
+    class_to_idx = checkpoint['class_to_idx']
+    num_classes = len(class_to_idx)
+    model = torchvision.models.__dict__[arch](num_classes=num_classes)
+    model_dict = model.state_dict()
+    new_state_dict = OrderedDict()
+    matched_layers, discarded_layers = [], []
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            k = k[7:]
+        if k in model_dict and model_dict[k].size() == v.size():
+            new_state_dict[k] = v
+            matched_layers.append(k)
+        else:
+            discarded_layers.append(k)
+    model_dict.update(new_state_dict)
+    model.load_state_dict(model_dict)
+    model.class_to_idx = class_to_idx
+    if len(matched_layers) == 0:
+        app.logger.info('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
+    else:
+        app.logger.info('Successfully loaded pretrained weights from "{}":\n"{}"'.format(file_name, matched_layers))
+        if len(discarded_layers) > 0:
+            app.logger.info("!!!!!! The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            return
+
+    if gpu_or_cpu=='gpu':
+        app.logger.info("Transfering models to GPU(s)")
+        model = torch.nn.DataParallel(model_pretrained).cuda()
+    return model
+
+            
+@app.before_first_request            
+def loadmodels():
+   
+    for k in models_to_apply:
+        amodel = load_model_to_continue_froma_state_dict( all_models[k])
+        amodel.eval()
+        aimodels[k] = amodel
+
+# _____________________ AI Section _____________________
+
 
 def token_required(f):  
     @wraps(f)
@@ -201,32 +320,15 @@ class StatsAPI(Resource):
         token = auth_headers[1]
         udata = jwt.decode(token, current_app.config['SECRET_KEY'])
         user = User.query.filter_by(login=udata['sub']).first()
-        fpath = os.path.join(FILE_PATH, user.login)
+        fpath = os.path.join(current_app.config['FILE_PATH'], user.login)
         maxqueryage = current_app.config['QUERY_AGE']
-        remoteip = request.remote_addr
+        remoteip = None
         if not user:
             return abort(403)
-        app.logger.debug(request.form)
-        cf_threshold = request.form.get('inputThreshold', None)
-        min_image_size = request.form.get('inputMinSize', None)
-        pred_mode = request.form.get('inputMode', None)
 
-        if all([cf_threshold, min_image_size, pred_mode]):
-            cfg.merge_from_file(CONFIG_FILE)
-            cfg.merge_from_list(["MODEL.DEVICE", MODE])
-            coco = predictor.COCODemo(
-                cfg,
-                min_image_size=int(min_image_size),
-                confidence_threshold=float(cf_threshold),
-            )
-        else:
-            coco = coco_demo
-        
-        index = request.form.get('index', None)
-        orig_name = request.form.get('filename', None)
-        f = request.files.get('croppedfile', None)
-        if not any((index, orig_name, f)):
-            fabort(400, 'Index, filename & croppedfile are required')
+        index = request.form['index']
+        orig_name = request.form['filename']
+        f = request.files['croppedfile']
         data = f.read()
         fsize = len(data)
         imgext = os.path.splitext(f.filename)[-1].lower()
@@ -235,53 +337,65 @@ class StatsAPI(Resource):
         fuuid = str(uuid.uuid4())
         fname = fuuid + imgext
         prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == orig_name).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
+        # The service is running under nginx proxy, so the simple
+        # request.remote_ipaddr would always return 127.0.0.1
+        if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
+            remoteip = request.environ['REMOTE_ADDR']
+        else:
+            remoteip = request.environ['HTTP_X_FORWARDED_FOR']
 
         # if it was more than 3 requests in last 10 minutes,
         # return 429 too many requests
         now = datetime.datetime.now()
         sometimebefore = now - datetime.timedelta(minutes=BLOCKTIME)
-        
-        recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
-        numrequests = len(recentrequests)
-        if numrequests >= BLOCKREQUESTS:
-            app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
-            app.logger.info('Too many requests')
-            abort(429, message='Too many requests, try again later')
+        if remoteip:
 
+            recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
+            numrequests = len(recentrequests)
+            if numrequests >= BLOCKREQUESTS:
+                app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
+                app.logger.info('Too many requests')
+                abort(429, message='Too many requests, try again later')
+                
         if prevquery and prevquery.queryage <= maxqueryage:
+            #print(11)
             # return existing data without calculating
             app.logger.info("PREV REQUESTS")
             app.logger.info("Serving saved results")
             resp = json.loads(prevquery.result)
-            print(prevquery.local_name)
-            strippedpath = os.path.join(user.login, prevquery.local_name)
-            resurl = request.host_url + strippedpath
         else:
             app.logger.info("NEW RESULTS")
             fullpath = os.path.join(fpath, fname)
-            app.logger.debug(fullpath)
+
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
-                
-            pil_image = Image.open(fullpath).convert("RGB")
-            np_image = np.array(pil_image)[:, :, [2, 1, 0]]
-            predict_image = coco.run_on_opencv_image(np_image)
-            predict_image=Image.fromarray(predict_image[:, :, [2, 1, 0]])
-            predict_image.save(fullpath)
+            #print(4)
+            # AI Section start
+            img_pil = Image.open(io.BytesIO(data))
+            if imgext == '.png':
+                img_pil = remove_transparency(img_pil)
 
-            result = {'leave_prediction': 'success'}
+            img_tensor = only_make_square_transform(img_pil)
+            img_tensor.unsqueeze_(0)
+            img_variable = img_tensor
+            result = {}
+            # passing the image to models
+            # and getting back the result
+
+
+            app.logger.info("1 Plant / non plant")
+            result = get_model_results('three_class_model', result, img_variable)
+            app.logger.info('RESULT {}'.format( result))
+            # AI Section ends
+            
+            objtype = result.get("three_class_model", None)
+            resp  = {'objtype': objtype, 'index': index, 'filename': orig_name}
             app.logger.info(f'saving query {remoteip} {user}')
-            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(result), fsize=fsize)
+            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
-            # Should return saved file url
-            strippedpath = fullpath.replace(FILE_PATH, '')
-            app.logger.debug(strippedpath)
-            app.logger.debug(request.host_url)
-            resurl = request.host_url + strippedpath[1:]
-        app.logger.debug(request.host_url)
-        resurl = resurl.replace('http://', 'https://')
-        return jsonify({'url':resurl, 'index': index})
+
+        return jsonify(resp)
 
 
 class UserAPI(Resource):
@@ -386,7 +500,6 @@ api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
 @click.option('--phone',  help='phone')
 def adduser(login, password, name, phone):
     """ Create new user"""
-        
     newuser = User(login=login, name=name, phone=phone)
     newuser.hash_password(password)
     newuser.is_confirmed = True
