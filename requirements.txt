@@ -1,5 +1,6 @@
 marshmallow==2.16.1
-torch==1.2.0+cu92
+torch==1.0.1.post2
+torchvision==0.2.2.post2
 SQLAlchemy==1.2.12
 Flask_Cors==3.0.7
 Flask_Login==0.4.1
@@ -15,7 +16,6 @@ alembic==1.0.1
 Flask_SQLAlchemy==2.3.2
 Flask_RESTful==0.3.6
 itsdangerous==1.1.0
-torchvision==0.4.0+cu92
 imgaug==0.3.0
 Click==7.0
 Pillow==6.2.1
