@@ -38,10 +38,8 @@ import requests
 from PIL import Image
 import glob
 from collections import OrderedDict
-
-from imgaug import augmenters as iaa #AL added 2905
-import numpy as np  #AL added 2905
-
+from imgaug import augmenters as iaa 
+import numpy as np 
 
 
 app = Flask(__name__)
@@ -62,11 +60,7 @@ if __name__ != "__main__":
 
 # _____________________ AI Section _____________________
 
-plant_or_not_path = app.config['PLANT_OR_NOT_PATH']
-leaf_or_not_path = app.config['LEAF_OR_NOT_PATH']
-tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
-plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
-tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
+three_class_model = app.config['THREE_CLASS_MODEL']
 
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
@@ -76,7 +70,7 @@ BLOCKREQUESTS = app.config['BLOCKREQUESTS']
 #AL added 2905
 #resize = (224,224)
 resize = 224
-from imgaug import augmenters as iaa
+
 class ImgResizeAndPad:
     #max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
 #max_ratio_change - maximum relative increase of the short side toward square size (with probability 0.5). Set it to 1 to keep the aspect ratio of the img always.
@@ -109,35 +103,21 @@ class ImgResizeAndPad:
 
 only_make_square_transform = transforms.Compose([
     ImgResizeAndPad(resize=resize),
-#    lambda x: PIL.Image.fromarray(x),
     lambda x: Image.fromarray(x),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) ])
-#AL it was before 2905
-#using_data_transform = transforms.Compose([
-#    transforms.Resize(resize, interpolation=2),
-#    transforms.ToTensor(),
-#    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-#])
 
-modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
-           { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
-           { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
-)
+modres = ( { 0 : "healthysalad", 1 : "unhealthysalad", 2: "infr" } )
 
 global aimodels
 
 aimodels = {}
 
 all_models = {
-    'plant_or_not': plant_or_not_path,
-    'leaf_or_not': leaf_or_not_path,
-    'tomat_or_not': tomat_or_not_path,
-    'tomat_health_or_not': tomat_health_or_not_path,
-    'plant_health_or_not': plant_health_or_not_path
+    'three_class_model': three_class_model
 }
 
-models_to_apply = ("plant_or_not", "leaf_or_not", "tomat_or_not", "tomat_health_or_not", "plant_health_or_not")
+models_to_apply = ("three_class_model", )
 
 def get_model_results(modelname, results, img):
     model = aimodels[modelname]
@@ -395,7 +375,6 @@ class StatsAPI(Resource):
             if imgext == '.png':
                 img_pil = remove_transparency(img_pil)
 
-#            img_tensor = using_data_transform(img_pil)
             img_tensor = only_make_square_transform(img_pil)
             img_tensor.unsqueeze_(0)
             img_variable = img_tensor
@@ -403,49 +382,14 @@ class StatsAPI(Resource):
             # passing the image to models
             # and getting back the result
 
-            # 1. plant / non plant 
-            # if not plant:
-            # return result
-            # if plant:
-            # 2. leaf / non leaf
-            # if not leaf:
-            # return result
-            # if leaf:
-            # 3. tomato / non tomato
-            # if tomato:
-            # 4. tomato healthy / unhealthy
-            # if not tomato:
-            # 5. plant healthy / unhealthy
 
             app.logger.info("1 Plant / non plant")
-            result = get_model_results('plant_or_not', result, img_variable)
-            
-            if result['plant_or_not'] == "plant":
-                app.logger.info("Leaf / non leaf")
-
-                result = get_model_results('leaf_or_not', result, img_variable)
-                
-                if result['leaf_or_not'] == "leaf":
-                    app.logger.info("tomato / non tomato")
-                    result = get_model_results('tomat_or_not', result, img_variable)
-
-                    if result['tomat_or_not'] == "tomat":
-                        app.logger.info("health_tomato or not")
-                        result = get_model_results('tomat_health_or_not', result, img_variable)
-                    else:
-                        app.logger.info("health_plant or not")
-                        result = get_model_results('plant_health_or_not', result, img_variable)
-                
-
+            result = get_model_results('three_class_model', result, img_variable)
             app.logger.info('RESULT {}'.format( result))
             # AI Section ends
             
-            objtype = result.get("plant_or_not", "non_plant")
-            picttype = result.get("leaf_or_not", "not_single_leaf")
-            planttype = result.get("tomat_or_not", "non_tomat")
-            tomatostatus = result.get("tomat_health_or_not", "tomat_non_health")
-            plantstatus = result.get("plant_health_or_not", "plants_non_health")
-            resp  = {'objtype': objtype, 'picttype': picttype, 'planttype': planttype, 'plantstatus': plantstatus, 'tomatostatus': tomatostatus, 'index': index, 'filename': orig_name}
+            objtype = result.get("three_class_model", None)
+            resp  = {'objtype': objtype, 'index': index, 'filename': orig_name}
             app.logger.info(f'saving query {remoteip} {user}')
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
@@ -556,7 +500,6 @@ api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
 @click.option('--phone',  help='phone')
 def adduser(login, password, name, phone):
     """ Create new user"""
-        
     newuser = User(login=login, name=name, phone=phone)
     newuser.hash_password(password)
     newuser.is_confirmed = True
