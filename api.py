@@ -39,8 +39,7 @@ from PIL import Image
 import glob
 from collections import OrderedDict
 
-from imgaug import augmenters as iaa #AL added 2905
-import numpy as np  #AL added 2905
+import numpy as np
 
 
 
