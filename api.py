@@ -36,7 +36,7 @@ from PIL import Image
 import glob
 from collections import OrderedDict
 
-import numpy as np  #AL added 2905
+import numpy as np  
 
 # from predict.py
 from maskrcnn_benchmark.config import cfg
