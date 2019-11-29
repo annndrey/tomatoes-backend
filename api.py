@@ -35,12 +35,16 @@ import requests
 from PIL import Image
 import glob
 from collections import OrderedDict
-
+import cv2
 import numpy as np  
 
 # from predict.py
-from maskrcnn_benchmark.config import cfg
-import predictor
+# from maskrcnn_benchmark.config import cfg
+# import predictor
+from detectron2.utils.visualizer import Visualizer
+from detectron2.utils.visualizer import ColorMode
+
+from predict2 import create_predict_instance
 
 
 app = Flask(__name__)
@@ -60,25 +64,21 @@ MIN_IMAGE_SIZE = app.config['MIN_IMAGE_SIZE']
 BLOCKTIME = app.config['BLOCKTIME']
 BLOCKREQUESTS = app.config['BLOCKREQUESTS']
 FILE_PATH = app.config['FILE_PATH']
-coco_demo = None
+# coco_demo = None
+predictor = None
+leaf_metadata = None
 
-
-if __name__ != "__main__":
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
+#if __name__ != "__main__":
+#    gunicorn_logger = logging.getLogger('gunicorn.error')
+#    app.logger.handlers = gunicorn_logger.handlers
+#    app.logger.setLevel(gunicorn_logger.level)
 
 
 @app.before_first_request
 def createpredictor():
-    cfg.merge_from_file(CONFIG_FILE)
-    cfg.merge_from_list(["MODEL.DEVICE", MODE])
-    global coco_demo
-    coco_demo = predictor.COCODemo(
-        cfg,
-        min_image_size=MIN_IMAGE_SIZE,
-        confidence_threshold=CF_THRESHOLD,
-    )
+    global predictor
+    global leaf_metadata
+    predictor, leaf_metadata = create_predict_instance()
 
 def token_required(f):  
     @wraps(f)
@@ -210,17 +210,6 @@ class StatsAPI(Resource):
         cf_threshold = request.form.get('inputThreshold', None)
         min_image_size = request.form.get('inputMinSize', None)
         pred_mode = request.form.get('inputMode', None)
-
-        if all([cf_threshold, min_image_size, pred_mode]):
-            cfg.merge_from_file(CONFIG_FILE)
-            cfg.merge_from_list(["MODEL.DEVICE", MODE])
-            coco = predictor.COCODemo(
-                cfg,
-                min_image_size=int(min_image_size),
-                confidence_threshold=float(cf_threshold),
-            )
-        else:
-            coco = coco_demo
         
         index = request.form.get('index', None)
         orig_name = request.form.get('filename', None)
@@ -263,11 +252,21 @@ class StatsAPI(Resource):
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
                 
-            pil_image = Image.open(fullpath).convert("RGB")
-            np_image = np.array(pil_image)[:, :, [2, 1, 0]]
-            predict_image = coco.run_on_opencv_image(np_image)
-            predict_image=Image.fromarray(predict_image[:, :, [2, 1, 0]])
-            predict_image.save(fullpath)
+            # pil_image = Image.open(fullpath).convert("RGB")
+            # np_image = np.array(pil_image)[:, :, [2, 1, 0]]
+            # predict_image = coco.run_on_opencv_image(np_image)
+            # predict_image=Image.fromarray(predict_image[:, :, [2, 1, 0]])
+            # predict_image.save(fullpath)
+            im = cv2.imread(fullpath)
+            outputs = predictor(im)
+            v = Visualizer(im[:, :, ::-1],
+                           metadata=leaf_metadata, 
+                           scale=1, 
+                           instance_mode=ColorMode.IMAGE_BW   # remove the colors of unsegmented pixels
+                   
+            )
+            v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+            cv2.imwrite(fullpath,v.get_image()[:, :, ::-1])
 
             result = {'leave_prediction': 'success'}
             app.logger.info(f'saving query {remoteip} {user}')

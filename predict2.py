@@ -6,14 +6,13 @@ import torch, torchvision
 import sys
 # detectron2 logger
 import detectron2
-from detectron2.utils.logger import setup_logger
-setup_logger()
+#from detectron2.utils.logger import setup_logger
+#setup_logger()
 
 # import some common libraries
 import os
 import numpy as np
 import cv2
-from google.colab.patches import cv2_imshow
 
 # import some common detectron2 utilities
 from detectron2.engine import DefaultPredictor
@@ -29,12 +28,10 @@ from detectron2.utils.visualizer import ColorMode
 ########
 from detectron2.data.datasets import register_coco_instances
 
-def predict(path2read,
-            path2save):
-    
+def create_predict_instance():
     register_coco_instances("leaves_train_cocostyle",{},"/home/imolodtsov/keep_copies/datasets/coco/annotations/leaves_train.json","/home/imolodtsov/keep_copies/datasets/coco/leaves_train/")
     cfg = get_cfg()
-    cfg.merge_from_file("./detectron2_repo/configs/COCO-InstanceSegmentation/mask_rcnn_X_101_32x8d_FPN_3x.yaml")
+    cfg.merge_from_file("/home/imolodtsov/temp_de/detectron2_repo/configs/COCO-InstanceSegmentation/mask_rcnn_X_101_32x8d_FPN_3x.yaml")
     cfg.DATASETS.TRAIN = ("leaves_train_cocostyle",
                           #"GenFromSingleLeafs_cocostyle",
                           #"GenFromSingleLeafs_leafsnap_cocostyle",
@@ -51,7 +48,7 @@ def predict(path2read,
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128   # number of proposals to sample when training
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # only has one class (leaf)
 
-    cfg.OUTPUT_DIR="/home/imolodtsov/detectron2/trained_models/mask_rcnn_X_101_32x8d_FPN_3x"
+    cfg.OUTPUT_DIR="/home/imolodtsov/detectron2_trained_models/mask_rcnn_X_101_32x8d_FPN_3x"
     cfg.MODEL.WEIGHTS = os.path.join(cfg.OUTPUT_DIR, "model_final.pth")
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.7   # set the testing threshold for this model
     cfg.DATASETS.TEST = ("leaves_test_cocostyle", )
@@ -60,7 +57,10 @@ def predict(path2read,
 
     MetadataCatalog.get('/large_disc/pics_for_fermata/coco/leaves_test/').set(thing_classes=["leaf"])
     leaf_metadata = MetadataCatalog.get('/large_disc/pics_for_fermata/coco/leaves_test/')
+    return predictor, leaf_metadata
 
+def predict(predictor, leaf_metadata, path2read,
+            path2save):
     
 
     im = cv2.imread(path2read)
@@ -75,5 +75,6 @@ def predict(path2read,
     cv2.imwrite(path2save,v.get_image()[:, :, ::-1])
 
 if __name__ == "__main__":
-    predict(sys.argv[1], sys.argv[2])
+    create_predict_instance()
+    #predict(sys.argv[1], sys.argv[2])
     #predict("/large_disc/pics_for_fermata/potato_from_VNIIF/alternarioz_a/20190729_122240.jpg","/home/imolodtsov/data/temp.jpg")
