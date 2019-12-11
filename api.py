@@ -38,13 +38,8 @@ from collections import OrderedDict
 import cv2
 import numpy as np  
 
-# from predict.py
-# from maskrcnn_benchmark.config import cfg
-# import predictor
-from detectron2.utils.visualizer import Visualizer
-from detectron2.utils.visualizer import ColorMode
 
-from predict2 import create_predict_instance
+from predict2 import predict_visual
 
 
 app = Flask(__name__)
@@ -251,22 +246,9 @@ class StatsAPI(Resource):
             app.logger.debug(fullpath)
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
-                
-            # pil_image = Image.open(fullpath).convert("RGB")
-            # np_image = np.array(pil_image)[:, :, [2, 1, 0]]
-            # predict_image = coco.run_on_opencv_image(np_image)
-            # predict_image=Image.fromarray(predict_image[:, :, [2, 1, 0]])
-            # predict_image.save(fullpath)
-            im = cv2.imread(fullpath)
-            outputs = predictor(im)
-            v = Visualizer(im[:, :, ::-1],
-                           metadata=leaf_metadata, 
-                           scale=1, 
-                           instance_mode=ColorMode.IMAGE_BW   # remove the colors of unsegmented pixels
-                   
-            )
-            v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
-            cv2.imwrite(fullpath,v.get_image()[:, :, ::-1])
+            
+            predict_visual(fullpath,fullpath,status=False)
+
 
             result = {'leave_prediction': 'success'}
             app.logger.info(f'saving query {remoteip} {user}')
