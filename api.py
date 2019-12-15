@@ -69,7 +69,7 @@ leaf_metadata = None
 #    app.logger.setLevel(gunicorn_logger.level)
 
 
-@app.before_first_request
+#@app.before_first_request
 #def createpredictor():
 #    global predictor
 #    global leaf_metadata
