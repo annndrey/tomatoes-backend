@@ -119,16 +119,16 @@ def create_predict_instance():
     leaf_metadata = MetadataCatalog.get('/large_disc/pics_for_fermata/coco/leaves_test/')
     return predictor, leaf_metadata
 
-def predict_visual(path2read,path2save,status=False):
+def predict_visual(path2read,path2save, predictor, leaf_metadata, status=False):
     if status==False:
-        predict_shape_only(path2read,path2save)
+        predict_shape_only(path2read,path2save, predictor, leaf_metadata)
     else:
-        predict_with_status(path2read,path2save)
+        predict_with_status(path2read,path2save, predictor, leaf_metadata)
         
     
-def predict_shape_only(path2read,path2save):
+def predict_shape_only(path2read,path2save, predictor, leaf_metadata):
     
-    predictor, leaf_metadata = create_predict_instance()
+    #predictor, leaf_metadata = create_predict_instance()
     
     im = cv2.imread(path2read)
     outputs = predictor(im)
@@ -141,9 +141,9 @@ def predict_shape_only(path2read,path2save):
     v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
     cv2.imwrite(path2save,v.get_image()[:, :, ::-1])
 
-def predict_with_status(path2read,path2save):
+def predict_with_status(path2read,path2save, predictor, leaf_metadata):
     
-    predictor, leaf_metadata = create_predict_instance()
+    #predictor, leaf_metadata = create_predict_instance()
 
     im = cv2.imread(path2read)
     outputs = predictor(im)

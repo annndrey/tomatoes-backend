@@ -40,6 +40,7 @@ import numpy as np
 
 
 from predict2 import predict_visual
+from predict2 import create_predict_instance
 
 
 app = Flask(__name__)
@@ -69,11 +70,11 @@ leaf_metadata = None
 #    app.logger.setLevel(gunicorn_logger.level)
 
 
-#@app.before_first_request
-#def createpredictor():
-#    global predictor
-#    global leaf_metadata
-#    predictor, leaf_metadata = create_predict_instance()
+@app.before_first_request
+def createpredictor():
+    global predictor
+    global leaf_metadata
+    predictor, leaf_metadata = create_predict_instance()
 
 def token_required(f):  
     @wraps(f)
@@ -247,7 +248,7 @@ class StatsAPI(Resource):
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
             
-            predict_visual(fullpath,fullpath,status=False)
+            predict_visual(fullpath,fullpath,predictor,leaf_metadata,status=False )
 
 
             result = {'leave_prediction': 'success'}
