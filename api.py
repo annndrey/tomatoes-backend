@@ -70,10 +70,10 @@ leaf_metadata = None
 
 
 @app.before_first_request
-def createpredictor():
-    global predictor
-    global leaf_metadata
-    predictor, leaf_metadata = create_predict_instance()
+#def createpredictor():
+#    global predictor
+#    global leaf_metadata
+#    predictor, leaf_metadata = create_predict_instance()
 
 def token_required(f):  
     @wraps(f)
