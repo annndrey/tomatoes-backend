@@ -248,7 +248,7 @@ class StatsAPI(Resource):
             with open(fullpath, 'wb') as outf:
                 outf.write(data)
             
-            predict_visual(fullpath,fullpath,predictor,leaf_metadata,status=False )
+            predict_visual(fullpath,fullpath,predictor,leaf_metadata,status=False)
 
 
             result = {'leave_prediction': 'success'}
@@ -263,6 +263,9 @@ class StatsAPI(Resource):
             resurl = request.host_url + strippedpath[1:]
         app.logger.debug(request.host_url)
         resurl = resurl.replace('http://', 'https://')
+        app.logger.debug("!!!!")
+        app.logger.debug([resurl, index])
+        app.logger.debug("!!!!")
         return jsonify({'url':resurl, 'index': index})
 
 
