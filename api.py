@@ -348,27 +348,28 @@ class StatsAPI(Resource):
         # return 429 too many requests
         now = datetime.datetime.now()
         sometimebefore = now - datetime.timedelta(minutes=BLOCKTIME)
-        if remoteip:
+        #if remoteip:
 
-            recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
-            numrequests = len(recentrequests)
-            if numrequests >= BLOCKREQUESTS:
-                app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
-                app.logger.info('Too many requests')
-                abort(429, message='Too many requests, try again later')
+        #    recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
+        #    numrequests = len(recentrequests)
+        #    if numrequests >= BLOCKREQUESTS:
+        #        app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
+        #        app.logger.info('Too many requests')
+        #        abort(429, message='Too many requests, try again later')
                 
         if prevquery and prevquery.queryage <= maxqueryage:
-            #print(11)
-            # return existing data without calculating
-            app.logger.info("PREV REQUESTS")
-            app.logger.info("Serving saved results")
-            resp = json.loads(prevquery.result)
+            pass
+        #    #print(11)
+        #    # return existing data without calculating
+        #    app.logger.info("PREV REQUESTS")
+        #    app.logger.info("Serving saved results")
+        #    resp = json.loads(prevquery.result)
         else:
             app.logger.info("NEW RESULTS")
-            fullpath = os.path.join(fpath, fname)
+            #fullpath = os.path.join(fpath, fname)
 
-            with open(fullpath, 'wb') as outf:
-                outf.write(data)
+            #with open(fullpath, 'wb') as outf:
+            #    outf.write(data)
             #print(4)
             # AI Section start
             img_pil = Image.open(io.BytesIO(data))
