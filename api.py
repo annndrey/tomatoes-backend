@@ -52,11 +52,10 @@ db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
 
-if __name__ != "__main__":
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
-
+#if __name__ != "__main__":
+handler = logging.FileHandler('cityfarmer.log') 
+handler.setLevel(logging.DEBUG)
+app.logger.addHandler(handler)
 
 # _____________________ AI Section _____________________
 
@@ -390,8 +389,10 @@ class StatsAPI(Resource):
             # AI Section ends
             
             objtype = result.get("three_class_model", None)
+            # TODO REMOVE IN PROD
+            objtype = objtype
             resp  = {'objtype': objtype, 'index': index, 'filename': orig_name}
-            app.logger.info(f'saving query {remoteip} {user}')
+            app.logger.info(f'saving query {remoteip} {user} {resp}')
             newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
