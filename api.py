@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#Ю -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from functools import wraps
 from flask import Flask, g, make_response, request, current_app
@@ -19,6 +19,7 @@ from models import db, User, UserQuery
 
 import os
 import uuid
+import logging
 
 import click
 import datetime
@@ -31,13 +32,19 @@ import json
 import torch
 import torchvision
 from torchvision import datasets, models, transforms
+from img_transforms import ImgResizeAndPad
+from architectures import *
+
 
 import io
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import glob
 from collections import OrderedDict
+from imgaug import augmenters as iaa
+import numpy as np
 
+from apply_size_detector import CompClassifier
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}}, support_credentials=True, methods=['GET', 'POST', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
@@ -49,90 +56,29 @@ db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
 
-# _____________________ AI Section _____________________
+handler = logging.FileHandler('cannabis_regions.log')
+handler.setLevel(logging.DEBUG)
+app.logger.addHandler(handler)
+max_n_of_leaves_in_zone = 5
+classifiers = []
 
-tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
-plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
-tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
-using_model_name = app.config['USING_MODEL_NAME']
-num_classes_used = app.config['NUM_CLASSES_USED']
-using_data_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
 
-modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
-           { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
-           { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
-)
-
-aimodels = ()
-
-torch.set_grad_enabled(False)
-
-def load_pretrained_weights(model, weight_path):
-    """Load pretrianed weights to model
-    Incompatible layers (unmatched in name or size) will be ignored
-    Args:
-    - model (nn.Module): network model, which must not be nn.DataParallel
-    - weight_path (str): path to pretrained weights
-    """
-#    checkpoint = torch.load(weight_path)
-    checkpoint = torch.load(weight_path, map_location='cpu')
-    if 'state_dict' in checkpoint:
-        state_dict = checkpoint['state_dict']
-    else:
-        state_dict = checkpoint
-    model_dict = model.state_dict()
-    new_state_dict = OrderedDict()
-    matched_layers, discarded_layers = [], []
-    for k, v in state_dict.items():
-        # If the pretrained state_dict was saved as nn.DataParallel,
-        # keys would contain "module.", which should be ignored.
-        if k.startswith('module.'):
-            k = k[7:]
-        if k in model_dict and model_dict[k].size() == v.size():
-            new_state_dict[k] = v
-            matched_layers.append(k)
-        else:
-            discarded_layers.append(k)
-    model_dict.update(new_state_dict)
-    model.load_state_dict(model_dict)
-    if len(matched_layers) == 0:
-        warnings.warn('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
-    else:
-        print('Successfully loaded pretrained weights from "{}"'.format(weight_path))
-        if len(discarded_layers) > 0:
-            print("** The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
-
-            
-@app.before_first_request            
+@app.before_first_request
 def loadmodels():
-    print("loading models")
-    tomat_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_or_not_model, tomat_or_not_path)
-    tomat_or_not_model.eval()
-
-    plant_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(plant_health_or_not_model, plant_health_or_not_path)
-    plant_health_or_not_model.eval()
-
-    tomat_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_health_or_not_model, tomat_health_or_not_path)
-    tomat_health_or_not_model.eval()
-    global aimodels
-    aimodels = (tomat_or_not_model, tomat_health_or_not_model, plant_health_or_not_model)
-
-# _____________________ AI Section _____________________
+    sd_model_name = app.config['SD_MODEL_NAME']
+    sd_model_path =  app.config['SD_MODEL_PATH']
+    cl_model_name = app.config['CL_MODEL_NAME']
+    cl_model_path = app.config['CL_MODEL_PATH']
+    cl_model_mode = app.config['CL_MODEL_MODE']
+    num_classes = app.config['NUM_CLASSES']
+    classifiers.append(CompClassifier(sd_model_name=sd_model_name, sd_model_path=sd_model_path,
+                                      cl_model_name=cl_model_name, cl_model_path=cl_model_path, cl_model_mode=cl_model_mode, num_classes=num_classes))
 
 
-def token_required(f):  
+def token_required(f):
     @wraps(f)
     def _verify(*args, **kwargs):
         auth_headers = request.headers.get('Authorization', '').split()
-
         invalid_msg = {
             'message': 'Invalid token. Registeration and / or authentication required',
             'authenticated': False
@@ -145,9 +91,8 @@ def token_required(f):
         if len(auth_headers) != 2:
             return abort(403)
 
-        #try:
         token = auth_headers[1]
-        data = jwt.decode(token, current_app.config['SECRET_KEY'])
+        data = jwt.decode(token, current_app.config['SECRET_KEY'], options={'verify_exp': False})
         user = User.query.filter_by(login=data['sub']).first()
 
         if not user:
@@ -213,16 +158,16 @@ def get_auth_token():
     return jsonify({ 'token': "%s" % token })
 
 
-# SCHEMAS 
-class UserSchema(ma.ModelSchema):
+# SCHEMAS
+class UserSchema(ma.Schema):
     class Meta:
         model = User
 
 
-class StatsAPI(Resource):
+class ClassifyAPI(Resource):
     def __init__(self):
         self.reqparse = reqparse.RequestParser()
-    
+
     def options(self, *args, **kwargs):
         return jsonify([])
 
@@ -245,83 +190,24 @@ class StatsAPI(Resource):
         token = auth_headers[1]
         udata = jwt.decode(token, current_app.config['SECRET_KEY'])
         user = User.query.filter_by(login=udata['sub']).first()
-        fpath = os.path.join(current_app.config['FILE_PATH'], user.login)
-        maxqueryage = current_app.config['QUERY_AGE']
         if not user:
             return abort(403)
-        index = request.form['index']
-        orig_name = request.form['filename']
+        #index = request.form['index']
+        #orig_name = request.form['filename']
         f = request.files['croppedfile']
         data = f.read()
-        fsize = len(data)
-        imgext = os.path.splitext(f.filename)[-1]
-        #print(1)
-        if not os.path.exists(fpath):
-            os.makedirs(fpath)
-        #print(2)
-        fuuid = str(uuid.uuid4())
-        fname = fuuid + imgext
-        #print(3)
-        prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == orig_name).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
-        if prevquery and prevquery.queryage <= maxqueryage:
-            #print(11)
-            # return existing data without calculating
-            print("SAVED RESULTS")
-            resp = json.loads(prevquery.result)
-        else:
-            print("NEW RESULTS")
-            fullpath = os.path.join(fpath, fname)
+        app.logger.info(["NEW RESULTS", len(data)])
 
-            with open(fullpath, 'wb') as outf:
-                outf.write(data)
-            #print(4)
-            # AI Section start
-            img_pil = Image.open(io.BytesIO(data))
-            print(img_pil)
-            #print(5)
-            img_tensor = using_data_transform(img_pil)
-            img_tensor.unsqueeze_(0)
-            img_variable = img_tensor
-            result = {}
-            #print(6)
-            for model in aimodels:
-                outputs = model(img_variable)
-                _, preds = torch.max(outputs, 1)
-                key = f.filename
-                if key in result:
-                    result[key].append( int(preds) )
-                else:
-                    result[key]= [int(preds)]
-             # AI Section ends
-            #print(7)
-            # Plant: Tomato/Not tomato
-            # Status: Health/Unhealthy
-            # if tomato:
-            resdata = result[f.filename]
-            planttype = ""
-            plantstatus = ""
-            #print(8)
-            if  resdata[0] == 0:
-                planttype = "Not tomato"
-                if resdata[2] == 0:
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
-            else:
-                planttype = "Tomato"
-                if resdata[1] == 0:
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
+        # AI Section start
+        img_pil = Image.open(io.BytesIO(data))
+        if img_pil.format == 'PNG':
+            img_pil = remove_transparency(img_pil)
 
-            #print(9)
-            resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
+        #path = './cannab_4.jpeg'
+        print(['Classifier', classifiers])
+        classified_results = classifiers[0].parse_request_picture(img_pil, max_n_of_leaves_in_zone)
 
-            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
-            db.session.add(newquery)
-            db.session.commit()
-            #print(10)
-        print(jsonify(resp))
+        resp  = {'objtype': classified_results, 'index': 'index', 'filename': 'orig_name'}
         return jsonify(resp)
 
 
@@ -332,10 +218,10 @@ class UserAPI(Resource):
         self.m_schema = UserSchema(many=True, exclude=['password_hash',])
         self.method_decorators = []
 
-        
+
     def options(self, *args, **kwargs):
         return jsonify([])
-        
+
     @token_required
     @cross_origin()
     def get(self, id=None):
@@ -354,25 +240,25 @@ class UserAPI(Resource):
     def patch(self, id):
         if not request.json:
             abort(400, message="No data provided")
-            
+
         user = db.session.query(User).filter(User.id==id).first()
         if user:
             for attr in ['login', 'phone', 'name', 'note', 'is_confirmed', 'confirmed_on', 'password']:
                 val = request.json.get(attr)
                 if attr == 'password' and val:
                     user.hash_password(val)
-                    
+
                 elif attr == 'confirmed_on':
                     val = datetime.datetime.now()
 
-                        
+
                 if val:
                     setattr(user, attr, val)
-                
+
             db.session.add(user)
             db.session.commit()
             return jsonify(self.schema.dump(user).data), 201
-        
+
         abort(404, message="Not found")
 
     @token_required
@@ -384,10 +270,10 @@ class UserAPI(Resource):
         phone = request.json.get('phone')
         name = request.json.get('name')
         password = request.json.get('password')
-        
+
         if not(any([login, phone, name])):
             return abort(400, 'Provide required fields for phone, name or login')
-        
+
         prevuser = db.session.query(User).filter(User.login==login).first()
         if prevuser:
             abort(409, message='User exists')
@@ -399,13 +285,13 @@ class UserAPI(Resource):
             confirmed_on = datetime.datetime.today()
 
         newuser = User(login=login, is_confirmed=is_confirmed, confirmed_on=confirmed_on, phone=phone, name=name, note=note)
-        
+
         newuser.hash_password(password)
         db.session.add(newuser)
         db.session.commit()
-        
+
         return jsonify(self.schema.dump(newuser).data), 201
-    
+
     def delete(self, id):
         if not id:
             abort(404, message="Not found")
@@ -417,7 +303,7 @@ class UserAPI(Resource):
         abort(404, message="Not found")
 
 api.add_resource(UserAPI, '/users', '/users/<int:id>', endpoint = 'users')
-api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
+api.add_resource(ClassifyAPI, '/loadimage', endpoint = 'loadimage')
 
 
 @app.cli.command()
@@ -427,15 +313,16 @@ api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
 @click.option('--phone',  help='phone')
 def adduser(login, password, name, phone):
     """ Create new user"""
-        
     newuser = User(login=login, name=name, phone=phone)
     newuser.hash_password(password)
     newuser.is_confirmed = True
     newuser.confirmed_on = datetime.datetime.today()
     db.session.add(newuser)
     db.session.commit()
-    print("New user added", newuser)
 
-                
+    app.logger.info(["New user added", newuser])
+
+
 if __name__ == '__main__':
+    app.debug = True
     app.run(host='0.0.0.0')
