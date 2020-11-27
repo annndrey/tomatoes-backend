@@ -77,6 +77,7 @@ class UserQuery(db.Model):
     user_id = db.Column(db.Integer, ForeignKey('user.id'))
     user = relationship("User", backref=backref("queries"))
     result = db.Column(db.Text(), nullable=True)
+    ipaddr = db.Column(db.Text(), nullable=True)
     fsize = db.Column(db.Integer)
 
     @hybrid_property

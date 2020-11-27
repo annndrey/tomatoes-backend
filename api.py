@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#Ю -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from functools import wraps
 from flask import Flask, g, make_response, request, current_app
@@ -19,6 +19,7 @@ from models import db, User, UserQuery
 
 import os
 import uuid
+import logging
 
 import click
 import datetime
@@ -37,6 +38,8 @@ import requests
 from PIL import Image
 import glob
 from collections import OrderedDict
+from imgaug import augmenters as iaa 
+import numpy as np 
 
 
 app = Flask(__name__)
@@ -49,48 +52,116 @@ db.init_app(app)
 migrate = Migrate(app, db)
 ma = Marshmallow(app)
 
+#if __name__ != "__main__":
+handler = logging.FileHandler('cityfarmer.log') 
+handler.setLevel(logging.DEBUG)
+app.logger.addHandler(handler)
+
 # _____________________ AI Section _____________________
 
-tomat_or_not_path = app.config['TOMAT_OR_NOT_PATH']
-plant_health_or_not_path = app.config['PLANT_HEALTH_OR_NOT_PATH']
-tomat_health_or_not_path = app.config['TOMAT_HEALTH_OR_NOT_PATH']
+three_class_model = app.config['THREE_CLASS_MODEL']
 using_model_name = app.config['USING_MODEL_NAME']
 num_classes_used = app.config['NUM_CLASSES_USED']
-using_data_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
 
-modres = ( { 0 : "it's not a tomato", 1 : "it's a tomato" },
-           { 0 : "it's a healthy tomato", 1 : "it's an unhealthy tomato" },
-           { 0 : "it's a healthy plant", 1 : "it's an unhealthy plant" }
-)
+BLOCKTIME = app.config['BLOCKTIME']
+BLOCKREQUESTS = app.config['BLOCKREQUESTS']
+#AL added 2905
+#resize = (224,224)
+resize = 224
 
-aimodels = ()
+class ImgResizeAndPad:
+    #max_cropped_part - maximum percentage of each side length cropped (with probability ~0.5)
+#max_ratio_change - maximum relative increase of the short side toward square size (with probability 0.5). Set it to 1 to keep the aspect ratio of the img always.
+    def __init__(self, resize=224, max_ratio_change = 1.2):
+        self.max_ratio_change = max_ratio_change
+        self.resize = resize
+        self.pad = iaa.size.PadToFixedSize(width = resize, height = resize, pad_mode='constant', pad_cval=0, position='center')
+    def __call__(self, img):
+        img = np.array(img)
+        (h,w) = img.shape[0:2]
+        keep_h=False
+        M = w
+        m = h
+        if h>w :
+            keep_h=True
+            M = h
+            m = w
+        if self.max_ratio_change > 1:
+            new_m = int(m*self.max_ratio_change*self.resize/M)
+            if new_m>self.resize: new_m=self.resize
+        else:
+            new_m = int(m*self.resize/M)
+        if keep_h:
+            resize_to_square = iaa.Resize({"height": self.resize, "width": new_m})
+        else:
+            resize_to_square = iaa.Resize({"height": new_m, "width": self.resize})
+        img = resize_to_square.augment_image( img )
+        img = self.pad.augment_image( img )
+        return img
 
-torch.set_grad_enabled(False)
+only_make_square_transform = transforms.Compose([
+    ImgResizeAndPad(resize=resize),
+    lambda x: Image.fromarray(x),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) ])
 
-def load_pretrained_weights(model, weight_path):
-    """Load pretrianed weights to model
-    Incompatible layers (unmatched in name or size) will be ignored
-    Args:
-    - model (nn.Module): network model, which must not be nn.DataParallel
-    - weight_path (str): path to pretrained weights
-    """
-#    checkpoint = torch.load(weight_path)
-    checkpoint = torch.load(weight_path, map_location='cpu')
+modres = ( { 0 : "healthysalad", 1 : "unhealthysalad", 2: "infr" } )
+
+global aimodels
+
+aimodels = {}
+
+all_models = {
+    'three_class_model': three_class_model
+}
+
+models_to_apply = ("three_class_model", )
+
+def get_model_results(modelname, results, img):
+    model = aimodels[modelname]
+    idx_to_class = {v: k for k, v in model.class_to_idx.items()}
+    app.logger.debug(f"MODEL {idx_to_class}")
+    outputs = model(img)
+    _, preds = torch.max(outputs, 1)
+    detected_img_type = idx_to_class[int(preds)]
+    results[modelname] = detected_img_type
+    return results
+
+def remove_transparency(im, bg_colour=(255, 255, 255)):
+    # Only process if image has
+    # transparency (http://stackoverflow.com/a/1963146)
+    if im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info):
+        # Need to convert to RGBA if LA format
+        # due to a bug in PIL (http://stackoverflow.com/a/1963146)
+        alpha = im.convert('RGBA').split()[-1]
+        # Create a new background image of our matt color.
+        # Must be RGBA because paste requires both images have the same format
+        # (http://stackoverflow.com/a/8720632  and  http://stackoverflow.com/a/9459208)
+        bg = PIL.Image.new("RGB", im.size, bg_colour + (255,))
+        bg.paste(im, mask=alpha)
+        return bg
+    else:
+        return im
+
+
+def load_model_to_continue_froma_state_dict(file_name, gpu_or_cpu='cpu'):
+
+    app.logger.info('Loading model for continue training : "{}" to "{}" '.format(file_name, gpu_or_cpu))
+    assert gpu_or_cpu=='gpu' or gpu_or_cpu=='cpu' 
+    checkpoint = torch.load(file_name, map_location='cpu')
+    app.logger.info( "Saved entities: {}".format( checkpoint.keys()))
     if 'state_dict' in checkpoint:
         state_dict = checkpoint['state_dict']
     else:
         state_dict = checkpoint
+    arch = checkpoint['arch']
+    class_to_idx = checkpoint['class_to_idx']
+    num_classes = len(class_to_idx)
+    model = torchvision.models.__dict__[arch](num_classes=num_classes)
     model_dict = model.state_dict()
     new_state_dict = OrderedDict()
     matched_layers, discarded_layers = [], []
     for k, v in state_dict.items():
-        # If the pretrained state_dict was saved as nn.DataParallel,
-        # keys would contain "module.", which should be ignored.
         if k.startswith('module.'):
             k = k[7:]
         if k in model_dict and model_dict[k].size() == v.size():
@@ -100,30 +171,28 @@ def load_pretrained_weights(model, weight_path):
             discarded_layers.append(k)
     model_dict.update(new_state_dict)
     model.load_state_dict(model_dict)
+    model.class_to_idx = class_to_idx
     if len(matched_layers) == 0:
-        warnings.warn('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
+        app.logger.info('The pretrained weights "{}" cannot be loaded, please check the key names manually (** ignored and continue **)'.format(weight_path))
     else:
-        print('Successfully loaded pretrained weights from "{}"'.format(weight_path))
+        app.logger.info('Successfully loaded pretrained weights from "{}":\n"{}"'.format(file_name, matched_layers))
         if len(discarded_layers) > 0:
-            print("** The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            app.logger.info("!!!!!! The following layers are discarded due to unmatched keys or layer size: {}".format(discarded_layers))
+            return
+
+    if gpu_or_cpu=='gpu':
+        app.logger.info("Transfering models to GPU(s)")
+        model = torch.nn.DataParallel(model_pretrained).cuda()
+    return model
 
             
 @app.before_first_request            
 def loadmodels():
-    print("loading models")
-    tomat_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_or_not_model, tomat_or_not_path)
-    tomat_or_not_model.eval()
-
-    plant_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(plant_health_or_not_model, plant_health_or_not_path)
-    plant_health_or_not_model.eval()
-
-    tomat_health_or_not_model = torchvision.models.__dict__[using_model_name](num_classes=num_classes_used)
-    load_pretrained_weights(tomat_health_or_not_model, tomat_health_or_not_path)
-    tomat_health_or_not_model.eval()
-    global aimodels
-    aimodels = (tomat_or_not_model, tomat_health_or_not_model, plant_health_or_not_model)
+   
+    for k in models_to_apply:
+        amodel = load_model_to_continue_froma_state_dict( all_models[k])
+        amodel.eval()
+        aimodels[k] = amodel
 
 # _____________________ AI Section _____________________
 
@@ -147,7 +216,11 @@ def token_required(f):
 
         #try:
         token = auth_headers[1]
-        data = jwt.decode(token, current_app.config['SECRET_KEY'])
+        #try:
+        data = jwt.decode(token, current_app.config['SECRET_KEY'], options={'verify_exp': False})
+        #except:
+        #    jwt.exceptions.ExpiredSignatureError:
+        #    abort(403, message="")
         user = User.query.filter_by(login=data['sub']).first()
 
         if not user:
@@ -214,7 +287,7 @@ def get_auth_token():
 
 
 # SCHEMAS 
-class UserSchema(ma.ModelSchema):
+class UserSchema(ma.Schema):
     class Meta:
         model = User
 
@@ -241,87 +314,94 @@ class StatsAPI(Resource):
     @token_required
     @cross_origin()
     def post(self):
+        print(1)
         auth_headers = request.headers.get('Authorization', '').split()
+        print(2)        
         token = auth_headers[1]
+        print(3)        
         udata = jwt.decode(token, current_app.config['SECRET_KEY'])
         user = User.query.filter_by(login=udata['sub']).first()
         fpath = os.path.join(current_app.config['FILE_PATH'], user.login)
         maxqueryage = current_app.config['QUERY_AGE']
+        remoteip = None
         if not user:
             return abort(403)
+        print(4)
         index = request.form['index']
+        print(4.1)
         orig_name = request.form['filename']
+        print(4.2)        
         f = request.files['croppedfile']
+        print(5)
         data = f.read()
         fsize = len(data)
-        imgext = os.path.splitext(f.filename)[-1]
-        #print(1)
+        imgext = os.path.splitext(f.filename)[-1].lower()
         if not os.path.exists(fpath):
             os.makedirs(fpath)
-        #print(2)
         fuuid = str(uuid.uuid4())
         fname = fuuid + imgext
-        #print(3)
         prevquery = db.session.query(UserQuery).filter(UserQuery.orig_name == orig_name).filter(UserQuery.fsize == fsize).filter(UserQuery.user == user).first()
-        if prevquery and prevquery.queryage <= maxqueryage:
-            #print(11)
-            # return existing data without calculating
-            print("SAVED RESULTS")
-            resp = json.loads(prevquery.result)
+        # The service is running under nginx proxy, so the simple
+        # request.remote_ipaddr would always return 127.0.0.1
+        if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
+            remoteip = request.environ['REMOTE_ADDR']
         else:
-            print("NEW RESULTS")
-            fullpath = os.path.join(fpath, fname)
+            remoteip = request.environ['HTTP_X_FORWARDED_FOR']
 
-            with open(fullpath, 'wb') as outf:
-                outf.write(data)
+        # if it was more than 3 requests in last 10 minutes,
+        # return 429 too many requests
+        now = datetime.datetime.now()
+        sometimebefore = now - datetime.timedelta(minutes=BLOCKTIME)
+        #if remoteip:
+
+        #    recentrequests = db.session.query(UserQuery).filter(UserQuery.user == user).filter(UserQuery.ipaddr == remoteip).filter(UserQuery.timestamp > sometimebefore).all()
+        #    numrequests = len(recentrequests)
+        #    if numrequests >= BLOCKREQUESTS:
+        #        app.logger.info(f"It was {numrequests} requests in last {BLOCKTIME} minutes")
+        #        app.logger.info('Too many requests')
+        #        abort(429, message='Too many requests, try again later')
+                
+        if prevquery and prevquery.queryage <= maxqueryage:
+            pass
+        #    #print(11)
+        #    # return existing data without calculating
+        #    app.logger.info("PREV REQUESTS")
+        #    app.logger.info("Serving saved results")
+        #    resp = json.loads(prevquery.result)
+        else:
+            app.logger.info("NEW RESULTS")
+            #fullpath = os.path.join(fpath, fname)
+
+            #with open(fullpath, 'wb') as outf:
+            #    outf.write(data)
             #print(4)
             # AI Section start
             img_pil = Image.open(io.BytesIO(data))
-            print(img_pil)
-            #print(5)
-            img_tensor = using_data_transform(img_pil)
+            if imgext == '.png':
+                img_pil = remove_transparency(img_pil)
+
+            img_tensor = only_make_square_transform(img_pil)
             img_tensor.unsqueeze_(0)
             img_variable = img_tensor
             result = {}
-            #print(6)
-            for model in aimodels:
-                outputs = model(img_variable)
-                _, preds = torch.max(outputs, 1)
-                key = f.filename
-                if key in result:
-                    result[key].append( int(preds) )
-                else:
-                    result[key]= [int(preds)]
-             # AI Section ends
-            #print(7)
-            # Plant: Tomato/Not tomato
-            # Status: Health/Unhealthy
-            # if tomato:
-            resdata = result[f.filename]
-            planttype = ""
-            plantstatus = ""
-            #print(8)
-            if  resdata[0] == 0:
-                planttype = "Not tomato"
-                if resdata[2] == 0:
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
-            else:
-                planttype = "Tomato"
-                if resdata[1] == 0:
-                    plantstatus = "Healthy"
-                else:
-                    plantstatus = "Unhealthy"
+            # passing the image to models
+            # and getting back the result
 
-            #print(9)
-            resp  = {'planttype': planttype, 'plantstatus': plantstatus, 'index': index, 'filename': f.filename}
 
-            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, result=json.dumps(resp), fsize=fsize)
+            app.logger.info("1 Plant / non plant")
+            result = get_model_results('three_class_model', result, img_variable)
+            app.logger.info('RESULT {}'.format( result))
+            # AI Section ends
+            
+            objtype = result.get("three_class_model", None)
+            # TODO REMOVE IN PROD
+            objtype = objtype
+            resp  = {'objtype': objtype, 'index': index, 'filename': orig_name}
+            app.logger.info(f'saving query {remoteip} {user} {resp}')
+            newquery = UserQuery(local_name=fname, orig_name=orig_name, user=user, ipaddr=remoteip, result=json.dumps(resp), fsize=fsize)
             db.session.add(newquery)
             db.session.commit()
-            #print(10)
-        print(jsonify(resp))
+
         return jsonify(resp)
 
 
@@ -427,15 +507,16 @@ api.add_resource(StatsAPI, '/loadimage', endpoint = 'loadimage')
 @click.option('--phone',  help='phone')
 def adduser(login, password, name, phone):
     """ Create new user"""
-        
     newuser = User(login=login, name=name, phone=phone)
     newuser.hash_password(password)
     newuser.is_confirmed = True
     newuser.confirmed_on = datetime.datetime.today()
     db.session.add(newuser)
     db.session.commit()
-    print("New user added", newuser)
+
+    app.logger.info(["New user added", newuser])
 
                 
 if __name__ == '__main__':
+    app.debug = True
     app.run(host='0.0.0.0')
