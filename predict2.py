@@ -115,8 +115,8 @@ def create_predict_instance():
     cfg.MODEL.DEVICE="cpu"
     predictor = DefaultPredictor(cfg)
 
-    MetadataCatalog.get('/large_disc/pics_for_fermata/coco/leaves_test/').set(thing_classes=["leaf"])
-    leaf_metadata = MetadataCatalog.get('/large_disc/pics_for_fermata/coco/leaves_test/')
+    MetadataCatalog.get('/path/coco/leaves_test/').set(thing_classes=["leaf"])
+    leaf_metadata = MetadataCatalog.get('/path/coco/leaves_test/')
     return predictor, leaf_metadata
 
 def predict_visual(path2read,path2save, predictor, leaf_metadata, status=False):
@@ -194,5 +194,3 @@ def predict_with_status(path2read,path2save, predictor, leaf_metadata):
     
 if __name__ == "__main__":
     create_predict_instance()
-    #predict(sys.argv[1], sys.argv[2])
-    #predict("/large_disc/pics_for_fermata/potato_from_VNIIF/alternarioz_a/20190729_122240.jpg","/home/imolodtsov/data/temp.jpg")
