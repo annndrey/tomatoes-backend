@@ -236,7 +236,6 @@ if __name__ == "__main__":
     sd_model_name = 'AlexNet' # 'AlexNet' or 'DenseNet'
     sd_model_path = "./AlexNet.pth"
     cl_model_name = 'resnet50'
-    #cl_model_path = "/home/anton/fermata/codes/a_leaf_classifier/trained_models/cannab_10cl_izr_200_acc737.md"
     cl_model_path = "./ResNet-50_for_classification.md"
     num_classes = 5
     classifier = CompClassifier(sd_model_name=sd_model_name, sd_model_path=sd_model_path,
